@@ -84,7 +84,12 @@ class Button:
         pygame.draw.rect(surf, GOLD if hover and enabled else (145, 119, 75), self.rect, 2, border_radius=7)
         font = pygame.font.Font(None, 25)
         small = pygame.font.Font(None, 18)
-        surf.blit(font.render(self.text, True, CREAM if enabled else (130, 126, 116)), (self.rect.x + 12, self.rect.y + 8))
+        text = font.render(self.text, True, CREAM if enabled else (130, 126, 116))
+        if self.sub:
+            text_rect = text.get_rect(topleft=(self.rect.x + 12, self.rect.y + 8))
+        else:
+            text_rect = text.get_rect(center=self.rect.center)
+        surf.blit(text, text_rect)
         if self.sub:
             surf.blit(small.render(self.sub, True, (215, 185, 108) if enabled else (110, 105, 97)), (self.rect.x + 12, self.rect.y + 34))
 
