@@ -5,8 +5,8 @@ A compact, self-contained medieval RTS built with Python and pygame-ce. Defend t
 ## Run
 
 ```bash
-python -m pip install -r requirements.txt
-python main.py
+python3 -m pip install -r requirements.txt
+python3 main.py
 ```
 
 ## Controls
