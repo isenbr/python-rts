@@ -1,0 +1,75 @@
+Perform a final regression test after the persistent-button-font optimization. Do not modify source files during this test.
+
+Run the game through the normal Play-button event path at exactly 1280×720.
+
+Focus especially on confirming that sharing the persistent button fonts did not introduce problems elsewhere.
+
+1. Test all buttons that now receive the shared fonts:
+
+   * Main-menu buttons
+   * Raise Swordsman
+   * Raise Archer
+   * Any restart, victory, defeat, or return-to-menu buttons using the same Button class
+
+2. For each applicable button, test:
+
+   * Normal state
+   * Hovered state
+   * Enabled state
+   * Disabled state
+   * Click behavior
+
+3. Confirm:
+
+   * Labels and costs remain centered.
+   * Font size, spacing, antialiasing, and typography are unchanged.
+   * No button displays the wrong font.
+   * No text persists from a previously drawn button.
+   * No button state changes another button’s appearance.
+   * The Archer’s custom disabled label and cost colors remain correct.
+
+4. Test navigation and state transitions:
+
+   * Start from the main menu.
+   * Enter gameplay.
+   * Recruit both unit classes.
+   * Trigger victory.
+   * Return to the menu or restart.
+   * Trigger defeat if practical.
+   * Confirm buttons still render correctly after each transition.
+
+5. Check performance:
+
+   * Measure overall frame-rendering time, not only `draw_hud()`.
+   * Measure at least 300 steady-state frames.
+   * Test idle gameplay, camera movement, unit movement, combat, and newly revealed fog.
+   * Report average, median, minimum, and maximum frame-rendering time.
+   * Keep display flipping, event processing, and frame limiting measured separately.
+   * Confirm that no per-frame `pygame.font.Font()` construction remains in any button-rendering path.
+
+6. Check correctness:
+
+   * Run the Python compilation or syntax check.
+   * Run `git diff --check`.
+   * Check for runtime errors and warnings.
+   * Confirm the game remains exactly 1280×720.
+   * Confirm all previously fixed visual issues remain resolved.
+
+Capture screenshots at exactly 1280×720 showing:
+
+* Main menu
+* Gameplay with both recruitment buttons
+* Disabled Archer button
+* Active combat
+* Victory or defeat interface
+
+Report:
+
+* Whether all button states and transitions passed
+* Overall frame-rendering measurements
+* Any remaining `pygame.font.Font()` calls that occur during normal per-frame rendering
+* Any visual, gameplay, performance, or runtime issues
+* Screenshot filenames
+* Whether any files changed during testing
+
+Do not commit or make further optimizations yet. Report the results first.

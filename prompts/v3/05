@@ -1,0 +1,40 @@
+Fix only the visual smoothness of the fog-of-war boundary. Do not change which areas are visible, explored, or unexplored, and do not change vision range, exploration speed, terrain, units, HUD, objective panel, or gameplay mechanics.
+
+The current explored-area boundary appears heavily stepped and blocky because it follows the fog grid too visibly.
+
+Work step by step:
+
+1. Find the code that converts the fog-of-war grid states into the fog overlay.
+2. Keep the existing fog grid and all visibility calculations unchanged.
+3. Improve only how the boundary between fog states is rendered.
+4. Preserve the existing alpha values:
+
+   * Visible: alpha 0
+   * Explored: alpha 145
+   * Unexplored: alpha 235
+5. Smooth or soften only the outer edges between these regions.
+6. Do not blur the entire battlefield or make unexplored terrain clearly visible.
+7. Do not allow smoothing to expose units, buildings, or information in unexplored cells.
+8. Prefer a rendering approach such as:
+
+   * drawing the fog mask at a higher temporary resolution and downscaling smoothly,
+   * interpolating the fog mask between neighboring cells,
+   * or adding a narrow antialiased transition around state boundaries.
+9. Keep the transition narrow enough that the player can still understand approximately where visibility ends.
+10. Avoid changing the fog colors unless a very small adjustment is required to prevent visual artifacts.
+11. Make sure smoothing works while the camera moves and while units reveal new terrain.
+12. Avoid an expensive full-screen blur every frame if it causes a noticeable performance reduction.
+13. Keep the real map-border line visible and separate from the fog boundary.
+
+After making the change:
+
+* Launch through the normal Play-button event path.
+* Capture a new screenshot at exactly 1280×720.
+* Compare the new fog edge with the previous stepped boundary.
+* Confirm that the circular exploration area looks smoother at normal screenshot size.
+* Move a unit and verify that newly revealed fog updates correctly without trails, flickering, holes, or delayed patches.
+* Confirm that unexplored enemy units and structures remain completely hidden.
+* Confirm that visibility ranges, explored cells, camera behavior, movement, and gameplay logic are unchanged.
+* Check that the frame rate remains stable.
+* Report the smoothing technique used, any rendering constants added, and which file was modified.
+* Do not add battlefield decorations or adjust the objective spacing yet.

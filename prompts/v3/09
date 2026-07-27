@@ -1,0 +1,84 @@
+Perform a final visual and gameplay regression test of the current game. Do not modify any source files during this test.
+
+Test at exactly 1280×720 through the normal Play-button event path.
+
+Review the following areas:
+
+1. Window and HUD
+
+   * Confirm the game remains exactly 1280×720.
+   * Confirm all bottom HUD text and controls are fully visible.
+   * Confirm no text or panels are clipped.
+   * Confirm HUD elements do not overlap one another or the battlefield.
+
+2. Objective panel
+
+   * Confirm “Destroy the Crimson Hold” has a 10-pixel top margin.
+   * Confirm its text remains centered and readable.
+   * Confirm it does not overlap gameplay objects or other interface elements.
+
+3. Recruitment buttons
+
+   * Test Swordsman and Archer buttons in both enabled and disabled states.
+   * Confirm disabled Archer text remains readable but clearly unavailable.
+   * Confirm costs, essence checks, and click behavior still work correctly.
+
+4. Units
+
+   * Display or recruit both Swordsmen and Archers.
+   * Confirm their silhouettes are immediately distinguishable.
+   * Confirm faction colors, selection rings, and damage effects remain visible.
+   * Confirm unit artwork stays centered on the correct world positions.
+   * Confirm movement, formation spacing, selection, targeting, attack ranges, and combat behavior remain unchanged.
+
+5. Terrain
+
+   * Confirm terrain fills the entire visible viewport, including areas outside the playable western boundary.
+   * Confirm the western map-border line remains visible.
+   * Confirm there is no unexplained bright-green block or hard rendering cutoff.
+   * Confirm grass, stones, dirt patches, and brightness variation remain fixed to world coordinates.
+   * Confirm decorations do not obscure units, keeps, roads, or commands.
+
+6. Fog of war
+
+   * Confirm visible, explored, and unexplored states still use alpha values 0, 145, and 235.
+   * Confirm the fog boundary remains smoothly interpolated.
+   * Confirm the unexplored fog texture is subtle and does not reveal hidden terrain or enemies.
+   * Move the camera and units to check for flickering, seams, trails, halos, jumping texture, or delayed updates.
+   * Confirm enemy units and the enemy keep remain hidden until they should be visible.
+
+7. Gameplay regression
+
+   * Recruit units.
+   * Select and move individual units and groups.
+   * Test formation movement.
+   * Test combat against enemy units.
+   * Test attacks on the enemy keep.
+   * Confirm essence costs and gains work correctly.
+   * Confirm win and loss conditions still trigger correctly.
+   * Confirm restarting or returning to the menu still works.
+
+8. Performance and errors
+
+   * Watch for visible stuttering during camera movement, fog updates, combat, and large-unit movement.
+   * Check the console for runtime errors or warnings.
+   * Run the existing compilation or syntax checks.
+
+Capture representative screenshots at exactly 1280×720, including:
+
+* Initial gameplay
+* Both recruitment-button states
+* Swordsman and Archer units together
+* Camera movement near the western boundary
+* Newly revealed fog
+* Active combat
+
+Report:
+
+* Any remaining visual or gameplay issues, ranked from most important to least important
+* Whether each previously fixed issue remains resolved
+* Any runtime errors or performance problems
+* The screenshot filenames
+* Whether any files changed during testing
+
+Do not make fixes yet, even if an issue is found. Report the results first so the next improvement can be handled separately.

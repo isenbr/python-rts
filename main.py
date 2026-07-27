@@ -11,7 +11,7 @@ import pygame
 pygame.init()
 pygame.display.set_caption("Verdant Crown")
 
-WIDTH, HEIGHT = 1280, 760
+WIDTH, HEIGHT = 1280, 720
 MAP_SIZE, HUD_H = 200, 126
 FPS = 60
 GREEN = (67, 139, 79)
@@ -19,6 +19,15 @@ RED = (164, 61, 55)
 GOLD = (234, 191, 78)
 CREAM = (239, 228, 194)
 INK = (39, 35, 31)
+FOG_COLOR = (15, 20, 18)
+FOG_VISIBLE_ALPHA = 0
+FOG_EXPLORED_ALPHA = 145
+FOG_UNEXPLORED_ALPHA = 235
+FOG_TEXTURE_STRENGTH = 3
+FOG_TEXTURE_SCALE = .16
+TERRAIN_SEED = 4729
+GROUND_COLOR = (76, 109, 60)
+TERRAIN_DETAIL_MIN_ZOOM = 7
 
 
 def clamp(value, low, high):
@@ -70,11 +79,13 @@ class Base:
 
 
 class Button:
-    def __init__(self, rect, text, sub=""):
+    def __init__(self, rect, text, sub="", disabled_text=(130, 126, 116), disabled_sub=(110, 105, 97)):
         self.rect = pygame.Rect(rect)
         self.text, self.sub = text, sub
+        self.disabled_text = disabled_text
+        self.disabled_sub = disabled_sub
 
-    def draw(self, surf, mouse, enabled=True):
+    def draw(self, surf, mouse, label_font, cost_font, enabled=True):
         hover = self.rect.collidepoint(mouse)
         color = (88, 73, 53) if enabled else (60, 57, 53)
         if hover and enabled:
@@ -82,16 +93,14 @@ class Button:
         pygame.draw.rect(surf, (29, 27, 24), self.rect.inflate(4, 4), border_radius=9)
         pygame.draw.rect(surf, color, self.rect, border_radius=7)
         pygame.draw.rect(surf, GOLD if hover and enabled else (145, 119, 75), self.rect, 2, border_radius=7)
-        font = pygame.font.Font(None, 25)
-        small = pygame.font.Font(None, 18)
-        text = font.render(self.text, True, CREAM if enabled else (130, 126, 116))
+        text = label_font.render(self.text, True, CREAM if enabled else self.disabled_text)
         if self.sub:
             text_rect = text.get_rect(topleft=(self.rect.x + 12, self.rect.y + 8))
         else:
             text_rect = text.get_rect(center=self.rect.center)
         surf.blit(text, text_rect)
         if self.sub:
-            surf.blit(small.render(self.sub, True, (215, 185, 108) if enabled else (110, 105, 97)), (self.rect.x + 12, self.rect.y + 34))
+            surf.blit(cost_font.render(self.sub, True, (215, 185, 108) if enabled else self.disabled_sub), (self.rect.x + 12, self.rect.y + 34))
 
 
 class Game:
@@ -102,6 +111,8 @@ class Game:
         self.title = pygame.font.Font(None, 48)
         self.font = pygame.font.Font(None, 25)
         self.small = pygame.font.Font(None, 19)
+        self.button_font = pygame.font.Font(None, 25)
+        self.button_cost_font = pygame.font.Font(None, 18)
         self.state = "menu"
         self.play_btn = Button((WIDTH // 2 - 100, HEIGHT // 2 + 85, 200, 62), "Play!")
         self.reset()
@@ -118,6 +129,9 @@ class Game:
         self.zoom = 13.0
         self.explored = set()
         self.visible = set()
+        self._fog_revision = 0
+        self._fog_cache_key = None
+        self._fog_cache_surface = None
         self.drag_start = None
         self.drag_now = None
         self.arrows = []
@@ -136,15 +150,46 @@ class Game:
         self.add_unit("archer", "red", 169, 100)
 
     def make_terrain(self):
-        rng = random.Random(4729)
+        rng = random.Random(TERRAIN_SEED)
         terrain = {}
-        for _ in range(900):
-            x, y = rng.randrange(MAP_SIZE), rng.randrange(MAP_SIZE)
-            terrain[(x, y)] = rng.choice(("grass", "grass", "flower", "stone", "scrub"))
+        self.terrain_tones = {}
+        self.terrain_details = {}
+        quiet_zones = (
+            (self.player_base.x, self.player_base.y, 4.5),
+            (24.5, 100.5, 3.5),
+            (self.enemy_base.x, self.enemy_base.y, 4.5),
+            (170.5, 100.5, 3.5),
+        )
+        for x in range(MAP_SIZE):
+            for y in range(MAP_SIZE):
+                self.terrain_tones[(x, y)] = rng.choices(
+                    (-3, -2, -1, 0, 1, 2, 3),
+                    (1, 4, 8, 13, 8, 4, 1),
+                )[0]
+                if any((x + .5 - qx) ** 2 + (y + .5 - qy) ** 2 < radius ** 2
+                       for qx, qy, radius in quiet_zones):
+                    continue
+                roll = rng.random()
+                if roll < .018:
+                    kind = "tuft"
+                elif roll < .026:
+                    kind = "stone"
+                elif roll < .035:
+                    kind = "dirt"
+                else:
+                    continue
+                self.terrain_details[(x, y)] = (
+                    kind,
+                    rng.uniform(.2, .8),
+                    rng.uniform(.2, .8),
+                    rng.uniform(-.35, .35),
+                )
         for x in range(5, 195):
             y = int(100 + math.sin(x / 17) * 2)
             terrain[(x, y)] = "road"
             terrain[(x, y + 1)] = "road"
+            self.terrain_details.pop((x, y), None)
+            self.terrain_details.pop((x, y + 1), None)
         return terrain
 
     def add_unit(self, kind, team, x, y):
@@ -211,6 +256,8 @@ class Game:
         return (int(x), int(y)) in self.visible
 
     def update_visibility(self):
+        previous_visible = self.visible.copy()
+        previous_explored_count = len(self.explored)
         self.visible.clear()
         sources = [(self.player_base.x, self.player_base.y, 12)]
         sources += [(u.x, u.y, 8) for u in self.units if u.team == "green"]
@@ -220,6 +267,8 @@ class Game:
                     if (x - sx) ** 2 + (y - sy) ** 2 <= radius ** 2:
                         self.visible.add((x, y))
         self.explored.update(self.visible)
+        if self.visible != previous_visible or len(self.explored) != previous_explored_count:
+            self._fog_revision += 1
 
     def find_target(self, unit):
         opponents = [u for u in self.units if u.team != unit.team and u.health > 0]
@@ -306,21 +355,38 @@ class Game:
         self.screen.fill((70, 101, 55))
         left, top = self.screen_to_world((0, 0))
         right, bottom = self.screen_to_world((w, view_h))
-        x0, x1 = max(0, int(left) - 1), min(MAP_SIZE, int(right) + 2)
-        y0, y1 = max(0, int(top) - 1), min(MAP_SIZE, int(bottom) + 2)
+        x0, x1 = math.floor(left) - 1, math.ceil(right) + 1
+        y0, y1 = math.floor(top) - 1, math.ceil(bottom) + 1
         tile = max(1, int(self.zoom + 1))
         for x in range(x0, x1):
             for y in range(y0, y1):
                 sx, sy = self.world_to_screen(x, y)
-                tone = 2 if (x * 13 + y * 7) % 5 else -2
-                color = (76 + tone, 109 + tone, 60 + tone)
+                tone = self.terrain_tones.get((x, y), 0)
+                color = tuple(channel + tone for channel in GROUND_COLOR)
                 kind = self.terrain.get((x, y))
                 if kind == "road": color = (137, 118, 77)
                 pygame.draw.rect(self.screen, color, (int(sx), int(sy), tile, tile))
-                if self.zoom >= 10 and kind in ("flower", "stone", "scrub"):
-                    cx, cy = int(sx + self.zoom * .5), int(sy + self.zoom * .5)
-                    c = {"flower": (219, 202, 105), "stone": (101, 103, 91), "scrub": (48, 82, 43)}[kind]
-                    pygame.draw.circle(self.screen, c, (cx, cy), max(1, int(self.zoom * .12)))
+                detail = self.terrain_details.get((x, y))
+                if self.zoom >= TERRAIN_DETAIL_MIN_ZOOM and detail:
+                    detail_kind, ox, oy, angle = detail
+                    cx = round(sx + self.zoom * ox)
+                    cy = round(sy + self.zoom * oy)
+                    if detail_kind == "tuft":
+                        length = max(2, round(self.zoom * .24))
+                        color = (55, 91, 48)
+                        pygame.draw.line(self.screen, color, (cx, cy), (cx - 1, cy - length), 1)
+                        pygame.draw.line(self.screen, color, (cx, cy), (cx + 2, cy - length + 1), 1)
+                    elif detail_kind == "stone":
+                        radius = max(1, round(self.zoom * .11))
+                        pygame.draw.circle(self.screen, (96, 99, 84), (cx, cy), radius)
+                        pygame.draw.circle(self.screen, (123, 124, 103), (cx - 1, cy - 1), 1)
+                    else:
+                        width = max(3, round(self.zoom * .38))
+                        height = max(2, round(self.zoom * .17))
+                        patch = pygame.Surface((width, height), pygame.SRCALPHA)
+                        pygame.draw.ellipse(patch, (111, 92, 57, 75), patch.get_rect())
+                        rotated = pygame.transform.rotate(patch, math.degrees(angle))
+                        self.screen.blit(rotated, rotated.get_rect(center=(cx, cy)))
         border = self.world_to_screen(0, 0)
         pygame.draw.rect(self.screen, (39, 54, 35), (border[0], border[1], MAP_SIZE * self.zoom, MAP_SIZE * self.zoom), max(2, int(self.zoom * .15)))
 
@@ -363,9 +429,10 @@ class Game:
     def draw_unit(self, u):
         if u.team == "red" and not self.is_visible(u.x, u.y):
             return
-        sx, sy = self.world_to_screen(u.x - .5, u.y - .5)
-        size = max(5, int(self.zoom))
-        rect = pygame.Rect(int(sx), int(sy), size, size)
+        sx, sy = self.world_to_screen(u.x, u.y)
+        size = max(8, int(self.zoom * 1.55))
+        rect = pygame.Rect(0, 0, size, size)
+        rect.center = (round(sx), round(sy))
         color = GREEN if u.team == "green" else RED
         if u.flash > 0: color = CREAM
         if u.selected:
@@ -373,12 +440,43 @@ class Game:
         pygame.draw.rect(self.screen, (32, 31, 28), rect.inflate(2, 2), border_radius=max(2, size // 4))
         pygame.draw.rect(self.screen, color, rect, border_radius=max(2, size // 4))
         if u.kind == "swordsman":
-            pygame.draw.line(self.screen, (225, 223, 202), (rect.left + size * .28, rect.bottom - size * .2), (rect.right - size * .2, rect.top + size * .2), max(1, size // 7))
-            pygame.draw.line(self.screen, (92, 65, 39), (rect.left + size * .2, rect.centery), (rect.centerx, rect.bottom - size * .2), max(1, size // 8))
+            blade_start = (rect.left + size * .34, rect.bottom - size * .3)
+            blade_end = (rect.right - size * .16, rect.top + size * .16)
+            pygame.draw.line(self.screen, (225, 223, 202), blade_start, blade_end, max(2, size // 7))
+            pygame.draw.line(
+                self.screen,
+                (92, 65, 39),
+                (rect.left + size * .2, rect.centery + size * .05),
+                (rect.centerx + size * .06, rect.bottom - size * .2),
+                max(2, size // 9),
+            )
+            pygame.draw.line(
+                self.screen,
+                (92, 65, 39),
+                (rect.left + size * .25, rect.centery - size * .04),
+                (rect.centerx + size * .02, rect.centery + size * .2),
+                max(2, size // 10),
+            )
         else:
-            arc = pygame.Rect(rect.left + size * .18, rect.top + size * .14, size * .58, size * .72)
-            pygame.draw.arc(self.screen, (109, 67, 35), arc, -math.pi / 2, math.pi / 2, max(1, size // 7))
-            pygame.draw.line(self.screen, CREAM, (arc.centerx, arc.top), (arc.centerx, arc.bottom), max(1, size // 11))
+            arc = pygame.Rect(rect.left + size * .15, rect.top + size * .12, size * .62, size * .76)
+            pygame.draw.arc(self.screen, (109, 67, 35), arc, -math.pi / 2, math.pi / 2, max(2, size // 8))
+            pygame.draw.line(self.screen, CREAM, (arc.centerx, arc.top), (arc.centerx, arc.bottom), max(1, size // 12))
+            pygame.draw.line(
+                self.screen,
+                (225, 223, 202),
+                (rect.left + size * .24, rect.centery),
+                (rect.right - size * .14, rect.centery),
+                max(1, size // 12),
+            )
+            pygame.draw.polygon(
+                self.screen,
+                (225, 223, 202),
+                [
+                    (rect.right - size * .08, rect.centery),
+                    (rect.right - size * .23, rect.centery - size * .11),
+                    (rect.right - size * .23, rect.centery + size * .11),
+                ],
+            )
         self.draw_cracks(rect, u.health / u.max_health, u.uid)
 
     def draw_effects(self):
@@ -394,15 +492,40 @@ class Game:
 
     def draw_fog(self):
         w, h = self.screen.get_size(); view_h = h - HUD_H
-        fog = pygame.Surface((w, view_h), pygame.SRCALPHA)
         left, top = self.screen_to_world((0, 0)); right, bottom = self.screen_to_world((w, view_h))
-        for x in range(max(0, int(left) - 1), min(MAP_SIZE, int(right) + 2)):
-            for y in range(max(0, int(top) - 1), min(MAP_SIZE, int(bottom) + 2)):
-                if (x, y) in self.visible: continue
-                sx, sy = self.world_to_screen(x, y)
-                alpha = 145 if (x, y) in self.explored else 235
-                pygame.draw.rect(fog, (15, 20, 18, alpha), (int(sx), int(sy), int(self.zoom + 1), int(self.zoom + 1)))
-        self.screen.blit(fog, (0, 0))
+        x0, x1 = math.floor(left) - 2, math.ceil(right) + 3
+        y0, y1 = math.floor(top) - 2, math.ceil(bottom) + 3
+        cols, rows = x1 - x0, y1 - y0
+        cache_key = (x0, x1, y0, y1, self.zoom, self._fog_revision)
+        if cache_key != self._fog_cache_key:
+            mask = pygame.Surface((cols, rows), pygame.SRCALPHA)
+            for ix, x in enumerate(range(x0, x1)):
+                for iy, y in enumerate(range(y0, y1)):
+                    if not (0 <= x < MAP_SIZE and 0 <= y < MAP_SIZE):
+                        alpha = FOG_UNEXPLORED_ALPHA
+                    elif (x, y) in self.visible:
+                        alpha = FOG_VISIBLE_ALPHA
+                    elif (x, y) in self.explored:
+                        alpha = FOG_EXPLORED_ALPHA
+                    else:
+                        alpha = FOG_UNEXPLORED_ALPHA
+                    color = FOG_COLOR
+                    if alpha == FOG_UNEXPLORED_ALPHA:
+                        cloud = (
+                            math.sin((x + y * .61) * FOG_TEXTURE_SCALE)
+                            + math.sin((x * .37 - y) * FOG_TEXTURE_SCALE * .73)
+                            + math.sin((x * .19 + y * .43) * FOG_TEXTURE_SCALE * .41)
+                        ) / 3
+                        tone = round(cloud * FOG_TEXTURE_STRENGTH)
+                        color = tuple(channel + tone for channel in FOG_COLOR)
+                    mask.set_at((ix, iy), (*color, alpha))
+            self._fog_cache_surface = pygame.transform.smoothscale(
+                mask,
+                (max(1, round(cols * self.zoom)), max(1, round(rows * self.zoom))),
+            )
+            self._fog_cache_key = cache_key
+        destination = self.world_to_screen(x0 - .5, y0 - .5)
+        self.screen.blit(self._fog_cache_surface, (round(destination[0]), round(destination[1])))
 
     def draw_hud(self):
         w, h = self.screen.get_size(); top = h - HUD_H
@@ -412,17 +535,23 @@ class Game:
         self.screen.blit(self.font.render(f"{int(self.essence):,} essence", True, CREAM), (55, top + 18))
         self.screen.blit(self.small.render("+20 each second", True, (172, 158, 128)), (55, top + 44))
         sword_btn = Button((245, top + 16, 180, 62), "Raise Swordsman", "200 essence  •  [S]")
-        archer_btn = Button((440, top + 16, 180, 62), "Raise Archer", "500 essence  •  [A]")
-        sword_btn.draw(self.screen, pygame.mouse.get_pos(), self.essence >= 200)
-        archer_btn.draw(self.screen, pygame.mouse.get_pos(), self.essence >= 500)
+        archer_btn = Button(
+            (440, top + 16, 180, 62),
+            "Raise Archer",
+            "500 essence  •  [A]",
+            disabled_text=(190, 184, 169),
+            disabled_sub=(168, 160, 145),
+        )
+        sword_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font, self.essence >= 200)
+        archer_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font, self.essence >= 500)
         self.hud_buttons = [(sword_btn, "swordsman"), (archer_btn, "archer")]
         counts = {k: sum(u.team == "green" and u.kind == k for u in self.units) for k in ("swordsman", "archer")}
         selected = sum(u.selected for u in self.units)
         info = f"Army: {counts['swordsman']} swordsmen  •  {counts['archer']} archers  •  {selected} selected"
-        self.screen.blit(self.small.render(info, True, (190, 180, 153)), (245, top + 90))
+        self.screen.blit(self.small.render(info, True, (190, 180, 153)), (245, top + 86))
         controls = "[1] All swords   [2] All archers   [3] All army   •   Right-click: order"
         label = self.small.render(controls, True, (165, 155, 132))
-        self.screen.blit(label, (w - label.get_width() - 20, top + 94))
+        self.screen.blit(label, (w - label.get_width() - 20, top + 90))
         # Base vitality at right.
         self.screen.blit(self.small.render("VERDANT KEEP", True, (165, 198, 165)), (w - 210, top + 18))
         self.screen.blit(self.font.render(f"{max(0, int(self.player_base.health))} / 250", True, CREAM), (w - 210, top + 39))
@@ -445,8 +574,8 @@ class Game:
         lore = self.font.render("Raise your banners. Break the Crimson Hold.", True, (191, 181, 152))
         self.screen.blit(lore, (w // 2 - lore.get_width() // 2, 294))
         self.play_btn.rect.center = (w // 2, h // 2 + 110)
-        self.play_btn.draw(self.screen, pygame.mouse.get_pos())
-        hint = self.small.render("Mouse + keyboard  •  Press Play to begin", True, (145, 157, 137))
+        self.play_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font)
+        hint = self.small.render("Mouse + keyboard  •  Press Play to begin", True, (200, 190, 160))
         self.screen.blit(hint, (w // 2 - hint.get_width() // 2, h - 80))
 
     def draw_game(self):
@@ -461,7 +590,11 @@ class Game:
         self.draw_hud()
         if self.message_time > 0:
             label = self.font.render(self.message, True, CREAM)
-            box = label.get_rect(center=(self.screen.get_width() // 2, 34)).inflate(28, 16)
+            panel_padding = 10
+            box = label.get_rect(
+                midtop=(self.screen.get_width() // 2, panel_padding)
+            ).inflate(panel_padding * 2, panel_padding * 2)
+            box.top = panel_padding
             pygame.draw.rect(self.screen, (28, 27, 24), box, border_radius=8)
             self.screen.blit(label, label.get_rect(center=box.center))
         if self.winner:

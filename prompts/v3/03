@@ -1,0 +1,33 @@
+Fix only the visual readability of units near the keep. Do not change unit stats, movement, collision sizes, fog of war, battlefield terrain, HUD, objective panel, or recruitment buttons.
+
+The problem is that units appear extremely small and their classes are difficult to identify at a glance.
+
+Work step by step:
+
+1. Find the code responsible for drawing Swordsman and Archer units.
+2. Identify each unit’s current visual dimensions and its separate gameplay collision or selection dimensions.
+3. Increase only the rendered size enough that units are clearly visible at 1280×720.
+4. Do not increase their collision boxes, pathfinding footprint, attack range, spacing requirements, or movement speed.
+5. Keep each unit centered on its existing world position so increasing its visual size does not make it appear to move or occupy a different tile.
+6. Give Swordsmen and Archers clearly different silhouettes:
+
+   * Swordsmen should have a visible sword or close-combat shape.
+   * Archers should have a visible bow or ranged-combat shape.
+7. Preserve the current art style and faction colors.
+8. Do not rely only on tiny color differences to distinguish the classes.
+9. Make sure units remain distinguishable when several stand close together near the keep.
+10. Check that enlarged unit graphics do not cover health bars, selection indicators, other units, or the keep excessively.
+11. Avoid adding permanent text labels above every unit unless the existing art cannot be made clear without them.
+12. Keep enemy and player units visually consistent in size while preserving their faction distinction.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Recruit or display at least one Swordsman and one Archer near the keep.
+* Capture a new screenshot at exactly 1280×720.
+* Confirm that both unit types are visible immediately at normal screenshot size.
+* Confirm that a viewer can tell which unit is the Swordsman and which is the Archer without zooming in.
+* Confirm that gameplay collision, unit spacing, pathfinding, selection, combat, and movement behavior are unchanged.
+* Confirm that units do not overlap the HUD or obscure important keep information.
+* Report the previous and new rendered dimensions, the drawing changes made, and which file was modified.
+* Do not fix the empty battlefield, green terrain edge, fog boundary, or objective spacing yet.

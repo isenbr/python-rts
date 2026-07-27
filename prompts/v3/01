@@ -1,0 +1,22 @@
+Fix only the 1280×720 display compatibility and bottom HUD clipping. Do not change the fog of war, units, colors, buttons, gameplay mechanics, or art yet.
+
+Work step by step:
+
+1. Find where the game window or internal screen size is set to 1280×760.
+2. Change the game’s intended visible resolution to exactly 1280×720.
+3. Adjust the vertical layout so every HUD element fits within those 720 pixels.
+4. Keep the battlefield as large as reasonably possible, but reduce its height if necessary to reserve enough space for the complete bottom HUD.
+5. Move the “Army…” status and keyboard/control instructions upward so none of their text touches or extends beyond the bottom edge.
+6. Make sure the right-side controls line is fully visible and has a small amount of padding below it.
+7. Do not simply hide, remove, or shorten the instructions to make them fit.
+8. Check for hard-coded coordinates that still assume a 760-pixel-tall window and update them appropriately.
+9. Preserve the existing horizontal 1280-pixel layout.
+
+After making the change:
+
+* Launch the game using the normal Play-button event path.
+* Capture a new screenshot at exactly 1280×720.
+* Confirm that the entire HUD, including the Army status and all control instructions, is visible.
+* Check that no HUD panels overlap the battlefield or each other.
+* Report which files and layout values you changed.
+* Do not fix any of the other listed visual issues yet.

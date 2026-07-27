@@ -1,0 +1,49 @@
+Profile only the HUD rendering path to identify the cause of its approximately 51.9 ms/frame cost. Do not modify the game’s source code or visual appearance yet.
+
+The goal of this step is to separate the HUD into smaller timed sections so the next change can target the actual bottleneck.
+
+Test through the normal Play-button event path at exactly 1280×720 in the same Xvfb software-rendered environment used for the regression test.
+
+Measure these HUD operations separately:
+
+1. HUD background panels and rectangle drawing.
+2. Static text rendering, including:
+
+   * Keyboard and mouse instructions
+   * Fixed labels
+   * Button labels
+   * Objective text, if it is included in the HUD timing
+3. Dynamic text rendering, including:
+
+   * Essence count
+   * Army status
+   * Keep health
+   * Recruitment costs or availability
+4. Recruitment-button backgrounds, borders, and hover/disabled styling.
+5. Font rendering calls such as `font.render(...)`.
+6. Surface creation, alpha conversion, scaling, or copying performed by the HUD.
+7. Final HUD blits to the main screen.
+8. Any HUD-related function that redraws or rebuilds surfaces every frame.
+
+For each section:
+
+* Measure average time across at least 300 steady-state frames.
+* Also report minimum, median, and maximum time if practical.
+* Count how many times `font.render(...)` is called per frame.
+* Count how many new Pygame surfaces are created per frame.
+* Note which content actually changes every frame and which content is static.
+* Test once with the mouse stationary and once while hovering over recruitment buttons.
+* Test once with no gameplay activity and once during unit movement or combat.
+
+Check whether the measured HUD time includes display flipping, frame limiting, screenshot capture, event processing, or unrelated rendering. Those must be timed separately so they are not incorrectly attributed to the HUD.
+
+Report:
+
+* A timing breakdown ordered from most expensive to least expensive.
+* The exact functions and line ranges responsible for the largest cost.
+* The number of text renders and surface allocations per frame.
+* Whether the cost appears to come from repeated font rendering, alpha surfaces, button recreation, excessive blitting, instrumentation overhead, or another cause.
+* A single recommended first optimization with the smallest possible scope.
+* Whether any source files changed during profiling.
+
+Do not implement the optimization yet. Do not change HUD layout, fonts, colors, text, gameplay, terrain, fog, or units.

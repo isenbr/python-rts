@@ -1,0 +1,49 @@
+Optimize only the repeated `pygame.font.Font()` construction used by the recruitment buttons. Do not make any other performance, visual, layout, or gameplay changes yet.
+
+The profiler found that each button creates two temporary Font objects every frame, for four Font constructions per HUD frame. These short-lived fonts have cold glyph caches and cause most of the approximately 51.9 ms HUD-rendering cost.
+
+Work step by step:
+
+1. Find the two font sizes or font configurations constructed inside the button drawing code around `main.py:96–105`.
+2. Create one persistent font object for each required button font size.
+3. Initialize these fonts once during game or UI initialization, alongside the other persistent fonts.
+4. Pass the persistent fonts into the button drawing code or make them available through the existing UI/game object.
+5. Remove all `pygame.font.Font()` construction from the per-frame button rendering path.
+6. Ensure both recruitment buttons share the same persistent label font and persistent cost font where their typography matches.
+7. Do not change:
+
+   * Font files or font family
+   * Font sizes
+   * Bold or italic settings
+   * Antialiasing
+   * Button dimensions or positions
+   * Label or cost placement
+   * Text colors
+   * Enabled, disabled, or hover appearance
+   * Button wording
+   * Recruitment costs or click behavior
+8. Do not cache the rendered button text surfaces during this step. Continue calling `font.render()` normally, but use the persistent fonts so their glyph caches remain warm.
+9. Do not optimize or restructure any unrelated HUD code.
+10. Avoid adding new Font objects inside `Button.__init__` if Button objects are still recreated every frame. The fonts must be created outside all per-frame paths.
+
+After implementing the change:
+
+* Launch through the normal Play-button event path at exactly 1280×720.
+* Confirm that Swordsman and Archer button typography is pixel-for-pixel or visually unchanged.
+* Test enabled, disabled, and hovered states for both buttons.
+* Confirm that labels and costs remain correctly aligned and readable.
+* Confirm that recruitment costs, essence checks, hovering, and clicking still work.
+* Profile `draw_hud()` again over at least 300 steady-state frames in the same Xvfb environment.
+* Test stationary mouse, button hover, and unit activity.
+* Report:
+
+  * Previous and new average HUD-rendering time
+  * Minimum, median, and maximum
+  * Previous and new `pygame.font.Font()` constructions per frame
+  * Average `font.render()` cost after the change
+  * Where the persistent fonts are initialized
+  * Which function signatures or calls were changed
+  * Which file was modified
+* Capture a new screenshot at exactly 1280×720.
+* Run compilation and `git diff --check`.
+* Do not implement rendered-text caching or any other optimization yet.

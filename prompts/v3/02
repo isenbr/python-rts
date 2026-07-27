@@ -1,0 +1,23 @@
+Fix only the readability and contrast of the “Raise Archer” recruitment button when it is disabled. Do not change its size, position, wording, cost, gameplay behavior, or any other buttons or visual issues yet.
+
+Work step by step:
+
+1. Find the code that determines the “Raise Archer” button’s disabled background, label color, and cost-text color.
+2. Keep the button visibly disabled, but increase the contrast between its text and its dark gray-brown background.
+3. Make both the “Raise Archer” label and its cost clearly readable.
+4. Prefer lightening the disabled text and/or slightly adjusting the disabled background rather than making it look enabled.
+5. Ensure the disabled appearance is still visually distinct from the enabled button state.
+6. Do not change whether the button is enabled or disabled, the amount of essence required, or its click behavior.
+7. Check whether the label and cost use separate color values; update both if needed.
+8. Avoid changing shared button colors unless necessary. If the colors are shared, verify that other recruitment buttons remain readable and visually correct.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Test the “Raise Archer” button while the player does not have enough essence.
+* Capture a new 1280×720 screenshot.
+* Confirm that both the disabled label and cost are immediately readable.
+* Confirm that the button still clearly appears unavailable.
+* Compare it with an enabled recruitment button to make sure the two states are distinct.
+* Report the exact color values or constants changed and which file was modified.
+* Do not fix the unit size, fog of war, battlefield appearance, or objective spacing yet.

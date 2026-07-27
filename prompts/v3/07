@@ -1,0 +1,43 @@
+Improve only the visual detail of the battlefield terrain. Do not change fog opacity, visibility ranges, map boundaries, unit rendering, HUD, objective panel, buttons, camera behavior, or gameplay mechanics.
+
+The visible battlefield currently feels empty and visually flat. Add subtle terrain variation while keeping the map readable and preserving the existing style.
+
+Work step by step:
+
+1. Find the code that draws the base terrain tiles.
+2. Preserve the current main ground color and overall green terrain theme.
+3. Add subtle visual variation to the terrain, such as:
+
+   * small differences in tile brightness,
+   * sparse grass tufts,
+   * small stones,
+   * patches of dirt,
+   * or faint terrain markings.
+4. Keep all decorations purely visual:
+
+   * They must not affect movement.
+   * They must not affect collision or pathfinding.
+   * They must not affect unit targeting.
+   * They must not create selectable objects.
+5. Use deterministic placement based on world coordinates or a fixed random seed so decorations do not move or flicker between frames.
+6. Draw decorations in world space so they remain attached to the terrain when the camera moves.
+7. Make the details subtle enough that units, selection rings, buildings, and commands remain easy to see.
+8. Avoid placing dense detail directly beneath keeps or in crowded unit-spawn areas.
+9. Ensure terrain decorations remain beneath the fog overlay. Unexplored areas must not become easier to inspect or reveal hidden information.
+10. Do not add large trees, buildings, cliffs, walls, water, or other major terrain features during this change.
+11. Avoid visible repeating patterns or checkerboard effects.
+12. Keep performance stable by caching terrain decoration data or generating it only when necessary rather than performing expensive random generation every frame.
+13. Preserve the intentional western map-border line.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Capture a screenshot at exactly 1280×720.
+* Confirm that the explored terrain has more visual texture and no longer looks like a large flat surface.
+* Confirm that the decorations do not distract from or obscure units and buildings.
+* Move the camera and confirm that decorations remain fixed to their world positions without flickering or sliding.
+* Move units across decorated areas and confirm that movement, pathfinding, selection, and combat are unchanged.
+* Confirm that decorations beneath unexplored fog do not reveal hidden terrain or enemy information.
+* Check that frame performance remains stable.
+* Report the decoration types added, how their placement is made deterministic, any rendering constants added, and which file was modified.
+* Do not change fog darkness or add major battlefield landmarks yet.

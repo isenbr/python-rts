@@ -1,0 +1,35 @@
+Fix only the battlefield’s large flat green region and its abrupt vertical edge. Do not change fog-of-war exploration behavior, the shape or resolution of the fog boundary, unit rendering, gameplay mechanics, HUD, buttons, or objective panel yet.
+
+The current screenshot shows a large uniform green block covering the left side of the battlefield and ending at a hard vertical line. Determine whether this is an unintended terrain-rendering boundary or an intentional world boundary before changing it.
+
+Work step by step:
+
+1. Find the code that draws the battlefield terrain or ground beneath the fog of war.
+2. Find the code that draws the large green region on the left.
+3. Determine why it ends at a perfectly vertical edge:
+
+   * The terrain surface may be too narrow.
+   * A rectangle may be drawn using screen coordinates instead of world coordinates.
+   * The terrain may only be drawn inside the explored area.
+   * The fog layer may be replacing the terrain instead of covering it.
+   * A camera or viewport boundary may be calculated incorrectly.
+4. Preserve the existing map size, camera position, keep position, walkable area, and gameplay boundaries.
+5. Make the underlying terrain render continuously across the entire visible battlefield, including areas beneath unexplored fog.
+6. Fog of war should be drawn as an overlay above the terrain rather than causing the terrain itself to stop at a vertical line.
+7. Remove the conspicuous flat vertical cutoff unless it represents a real map boundary.
+8. If it is a real map boundary, give it an intentional visual treatment, such as a border, cliff, wall, or gradual terrain transition, without changing collision or pathfinding.
+9. Preserve the existing general terrain colors and art style.
+10. Do not add major decorative objects or redesign the battlefield during this change.
+11. Do not modify the stepped circular fog boundary yet.
+12. Do not brighten or reduce the unexplored fog yet unless that is strictly necessary to correct the rendering bug.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Capture a new screenshot at exactly 1280×720.
+* Confirm that the large green region no longer ends at an unexplained vertical edge.
+* Confirm that terrain exists beneath both explored and unexplored areas.
+* Confirm that fog still hides unexplored information and that exploration behavior is unchanged.
+* Confirm that camera movement, pathfinding, collision, map boundaries, and unit movement are unchanged.
+* Report the cause of the vertical edge, the exact drawing logic changed, and which file was modified.
+* Do not fix the coarse fog boundary, empty appearance, or objective spacing yet.

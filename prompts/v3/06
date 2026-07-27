@@ -1,0 +1,29 @@
+Fix only the spacing and placement of the objective text panel, “Destroy the Crimson Hold.” Do not change its wording, font, gameplay objective, HUD layout, fog, terrain, units, buttons, or battlefield decoration.
+
+The objective is readable, but its dark backing touches the top edge of the window and feels cramped.
+
+Work step by step:
+
+1. Find the code that draws the objective text and its dark background panel.
+2. Identify the panel’s current top coordinate, padding, width, height, and text alignment.
+3. Move the entire objective panel slightly downward so there is a clear margin between it and the top edge of the 1280×720 window.
+4. Aim for approximately 8–12 pixels of visible top margin.
+5. Keep the text vertically centered inside its backing panel.
+6. Ensure the panel has consistent internal padding on all sides.
+7. Preserve the current objective font, wording, colors, and general visual style.
+8. Do not make the panel substantially larger than necessary.
+9. Keep it clear of the battlefield HUD, units, and any other interface elements.
+10. Check for any related hard-coded coordinates that assume the panel begins at y=0.
+11. Do not reposition unrelated HUD elements.
+12. Do not redesign the panel or add icons, borders, animations, or new text during this change.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Capture a new screenshot at exactly 1280×720.
+* Confirm that the objective backing no longer touches the top edge.
+* Confirm that there is approximately 8–12 pixels of margin above it.
+* Confirm that the objective text remains centered and fully readable.
+* Confirm that the panel does not overlap or crowd any other interface elements.
+* Report the previous and new coordinates, padding values, and which file was modified.
+* Do not add battlefield decorations or alter the overall darkness of unexplored fog yet.

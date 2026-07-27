@@ -1,0 +1,48 @@
+Improve only the visual appearance of unexplored fog-of-war areas. Do not change visibility calculations, exploration behavior, vision ranges, terrain rendering, units, HUD, objective panel, camera, map boundaries, or gameplay mechanics.
+
+The unexplored fog currently hides information correctly, but its large, nearly black surface feels empty and visually flat.
+
+Work step by step:
+
+1. Find the code that renders the unexplored fog overlay.
+2. Preserve the current fog states and alpha logic:
+
+   * Visible: alpha 0
+   * Explored: alpha 145
+   * Unexplored: alpha 235
+3. Do not reduce unexplored fog opacity enough to reveal terrain details, enemies, structures, roads, or map features.
+4. Add subtle visual texture directly to the unexplored fog itself rather than making the underlying terrain more visible.
+5. Suitable fog-only details could include:
+
+   * very faint cloud-like variation,
+   * subtle noise,
+   * slow low-contrast drifting wisps,
+   * or a soft mottled pattern.
+6. Keep the effect dark, restrained, and low contrast so the area still clearly represents unknown territory.
+7. Do not use a simple repeating tile pattern that creates visible seams or checkerboards.
+8. Any pattern must remain consistent during camera movement:
+
+   * World-anchored fog texture should remain attached to world coordinates.
+   * Screen-anchored atmospheric texture should move smoothly without jumping.
+9. If animation is added, keep it extremely slow and subtle.
+10. Do not let animation change which cells appear visible, explored, or unexplored.
+11. Keep explored fog visually distinct from fully unexplored fog.
+12. Ensure the smoothed boundary between fog states continues to work without flickering, trails, square patches, or halos.
+13. Keep the terrain decorations completely concealed in unexplored regions.
+14. Preserve the western map-border line where appropriate, but do not make hidden map geography easier to infer.
+15. Use caching, pre-generated texture, or another inexpensive approach. Avoid regenerating full-screen procedural noise every frame.
+16. Do not add major landmarks, lighting effects, weather systems, or gameplay objects during this change.
+
+After making the change:
+
+* Launch the game through the normal Play-button event path.
+* Capture a screenshot at exactly 1280×720.
+* Confirm that unexplored fog no longer looks like a completely flat, nearly black block.
+* Confirm that it still looks substantially darker and more obscured than explored fog.
+* Confirm that terrain decorations, enemy units, enemy buildings, roads, and other hidden information cannot be identified through it.
+* Move the camera and verify that the fog texture does not jump, flicker, stretch incorrectly, or show visible seams.
+* Move units to reveal new territory and verify that fog transitions update cleanly.
+* Confirm that the existing bilinear boundary smoothing still works.
+* Measure the rendering cost and confirm that frame performance remains stable.
+* Report the visual technique used, whether it is world-anchored or screen-anchored, any constants added, and which file was modified.
+* Do not make any additional gameplay or interface changes.
