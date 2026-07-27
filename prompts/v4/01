@@ -1,0 +1,40 @@
+Inspect the current Verdant Crown project and prepare the enemy AI for incremental improvements.
+
+  Create an EnemyAI controller that owns enemy strategic decisions, while keeping unit movement and
+  combat behavior functionally unchanged for now. Introduce explicit AI states such as BUILDING,
+  RALLYING, ATTACKING, DEFENDING, and RECOVERING, but initially configure transitions so enemy behavior
+  remains close to the current behavior.
+
+  Keep strategic AI decisions separate from per-unit movement and combat wherever practical. Use seeded
+  or injectable randomness so AI behavior can be tested deterministically.
+
+  Before changing anything, identify the current enemy recruitment, movement, targeting, and attack
+  behavior. Add focused automated tests that characterize important existing mechanics, including:
+
+  - Unit statistics and recruitment costs
+  - Enemy essence generation and spending
+  - Attack range and cooldown behavior
+  - Death and target cleanup
+  - Enemy units eventually advancing toward the player base
+  - Fog-of-war restrictions for player targeting
+
+  Then implement the refactor and add tests for:
+
+  - Initial AI state
+  - Valid state transitions
+  - Enemy AI decisions updating on a controlled interval
+  - Deterministic behavior when supplied a fixed random seed
+
+  Preserve the current controls, visuals, player behavior, combat values, fog of war, and victory
+  conditions.
+
+  After implementation:
+
+  1. Run all automated tests.
+  2. Run a syntax or compilation check.
+  3. Launch the game and perform a short smoke test.
+  4. Take screenshots only under /work/screenshots.
+  5. After every screenshot, inspect it with view_image and report visual problems.
+  6. Report which files changed, what behavior was verified, and any remaining concerns.
+
+  Do not proceed to smarter tactical behavior in this step. Do not commit changes.

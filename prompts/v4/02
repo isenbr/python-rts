@@ -1,0 +1,41 @@
+Build on the existing EnemyAI architecture and implement smarter enemy target selection.
+
+  Create a clear target-scoring system instead of always selecting the nearest available opponent. The
+  system should consider:
+
+  - Whether a target is attacking or threatening the unit
+  - Distance to the target
+  - Target health and whether it can be finished quickly
+  - Unit matchup: swordsmen should prefer reachable archers, while archers should prefer dangerous or
+  vulnerable units
+  - Protecting nearby allied archers and the enemy base
+  - Avoiding unnecessary target switching
+
+  Add target commitment or hysteresis so a unit does not switch targets every update unless the new
+  target is meaningfully better or the current target becomes invalid.
+
+  Keep player-unit targeting behavior unchanged unless shared code must be refactored safely. Enemy AI
+  must not use information it should not reasonably possess outside its chosen awareness radius.
+
+  Add deterministic tests covering:
+
+  - Swordsmen preferring nearby archers when appropriate
+  - Archers prioritizing vulnerable or high-threat targets
+  - Units finishing low-health targets when sensible
+  - Units responding to attackers
+  - Stable target commitment across updates
+  - Invalid, dead, or distant targets being released
+  - Base-defense threats receiving increased priority
+
+  After implementation:
+
+  1. Run the full automated test suite.
+  2. Run a syntax or compilation check.
+  3. Perform controlled in-game combat tests with several unit compositions.
+  4. Verify attack ranges, cooldowns, damage, and player behavior remain unchanged.
+  5. Take screenshots only under /work/screenshots, inspect each with view_image, and report visual
+  problems.
+  6. Summarize observed targeting decisions and any balance concerns.
+
+  Do not add squad waves, strategic production, or new unit statistics yet. Do not commit changes.
+  

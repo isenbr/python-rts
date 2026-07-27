@@ -1,0 +1,39 @@
+Improve enemy tactical positioning while preserving the existing game’s unit statistics and visual
+  style.
+
+  Implement the following enemy-only tactical behaviors:
+
+  - Archers try to maintain an effective distance from nearby melee threats.
+  - An archer retreats or repositions when a swordsman enters a configurable danger radius.
+  - Archers must not retreat outside the map or continually oscillate between positions.
+  - Swordsmen try to place themselves between allied archers and nearby threats.
+  - Units maintain modest separation so they do not stack directly on top of each other.
+  - Repositioning should not prevent a unit from attacking when it already has a good firing position.
+  - Explicit strategic orders such as defending or rallying should constrain where units are allowed to
+  reposition.
+
+  Use steering or lightweight movement adjustments appropriate for this simple open map. Do not introduce
+  a heavyweight pathfinding system unless the existing map requires it.
+
+  Add deterministic tests for:
+
+  - Archers retreating from close melee units
+  - Archers holding position when safely within attack range
+  - Archers resuming attacks after repositioning
+  - Swordsmen moving to screen nearby archers
+  - Units separating when overlapping
+  - Units staying within map boundaries
+  - No rapid position oscillation in a controlled scenario
+  - No change to player-controlled unit behavior
+
+  After implementation:
+
+  1. Run all automated tests.
+  2. Run a syntax or compilation check.
+  3. Test swordsmen versus archers, mixed groups versus mixed groups, and combat near map edges.
+  4. Confirm movement speed, attack range, damage, and cooldown values remain unchanged.
+  5. Take screenshots only under /work/screenshots, inspect each with view_image, and report clipping,
+  stacking, jitter, or other visual problems.
+  6. Report the tactical behavior observed and any limitations.
+
+  Do not implement coordinated attack waves or adaptive production in this step. Do not commit changes.

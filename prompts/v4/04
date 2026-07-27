@@ -1,0 +1,42 @@
+Extend EnemyAI with coordinated squads and attack waves using the existing AI state machine.
+
+  Enemy units should no longer always walk toward the player base immediately after recruitment.
+  Implement:
+
+  - A rally point near the enemy base
+  - Assignment of available units to a forming attack squad
+  - A configurable minimum squad strength and maximum rally wait time
+  - A preferred mixed composition of frontline swordsmen and rear-line archers
+  - Formation destinations with swordsmen generally ahead of archers
+  - A transition from RALLYING to ATTACKING when the squad is ready or has waited too long
+  - A clear attack objective, normally the player base, with sensible responses to encountered defenders
+  - A transition to RECOVERING when an attack wave has suffered substantial losses
+  - Cleanup of squad membership when units die
+  - A later return to BUILDING or RALLYING for the next wave
+
+  Avoid requiring every unit to reach an exact formation coordinate, since that can stall an attack. Keep
+  thresholds and timings as named configuration values.
+
+  Add deterministic tests covering:
+
+  - New units rallying instead of immediately attacking
+  - Formation roles being assigned correctly
+  - A sufficiently strong squad launching an attack
+  - Maximum rally time preventing permanent waiting
+  - Squad members advancing together within a reasonable tolerance
+  - Casualties triggering recovery
+  - Dead units being removed from squad bookkeeping
+  - Successive attack waves being possible
+
+  After implementation:
+
+  1. Run the full automated test suite.
+  2. Run a syntax or compilation check.
+  3. Simulate enough game time to observe at least two attack waves.
+  4. Manually verify that formations do not stall, overlap excessively, or split apart without reason.
+  5. Verify that combat targeting and archer kiting still work during a wave.
+  6. Take screenshots only under /work/screenshots, inspect each with view_image, and report visual
+  problems.
+  7. Report state transitions, wave composition, timings, and any balance concerns.
+
+  Do not add adaptive production or full base-defense recalls yet. Do not commit changes.

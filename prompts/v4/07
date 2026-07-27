@@ -1,0 +1,64 @@
+Perform a complete integration and balancing pass on the improved EnemyAI. Do not add major new
+  features unless required to fix a verified problem.
+
+  Review the interactions among:
+
+  - Strategic state transitions
+  - Target scoring and target commitment
+  - Archer kiting and tactical positioning
+  - Swordsman screening
+  - Rallying and attack waves
+  - Base defense and unit recall
+  - Strategic production
+  - Essence management
+  - Unit death and squad cleanup
+  - Victory and defeat handling
+
+  Look for emergent problems such as:
+
+  - Units oscillating between commands or targets
+  - Archers retreating forever
+  - Swordsmen failing to reach combat
+  - Squads waiting indefinitely
+  - Attacks fragmenting into single-unit streams
+  - The AI remaining permanently defensive
+  - Distant attackers repeatedly being recalled
+  - Production deadlocks
+  - Hidden-information cheating
+  - Frame-rate-dependent decisions
+  - Dead units remaining in AI data structures
+
+  Create or extend automated regression tests for every issue found. Add a deterministic headless
+  simulation harness if one does not already exist. Run multiple fixed-seed matches or scenario
+  simulations and report useful measurements, including:
+
+  - Time of first attack wave
+  - Number and composition of waves
+  - Defensive state frequency
+  - Units produced by type
+  - Essence left unspent
+  - State transition counts
+  - Any stalled units or invalid targets
+  - Match outcome and approximate duration where practical
+
+  Tune named AI configuration values conservatively. Preserve player controls, fog of war, visuals,
+  economy values, unit statistics, and core victory conditions.
+
+  After implementation:
+
+  1. Run the complete automated test suite.
+  2. Run a syntax or compilation check.
+  3. Run all deterministic simulations and report their results.
+  4. Launch the game and perform a full manual gameplay smoke test.
+  5. Verify menu, pause, restart, selection, recruitment, camera, fog, combat, victory, and defeat
+  behavior.
+  6. Take screenshots only under /work/screenshots, inspect every screenshot with view_image, and report
+  all visual problems.
+  7. Clearly distinguish verified behavior from subjective balance observations.
+  8. List any remaining limitations or recommended follow-up work.
+
+  Do not commit changes.
+
+  This sequence keeps each change independently testable and makes regressions easier to locate. The
+  final prompt then validates the AI as one integrated system rather than assuming individually correct
+  features will automatically work well together.

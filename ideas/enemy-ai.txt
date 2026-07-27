@@ -1,0 +1,91 @@
+ 1. Smarter target selection — low effort
+
+  Units could prioritize targets based on threat and suitability:
+
+  - Archers attack enemy archers or low-health units first.
+  - Swordsmen pursue nearby archers.
+  - Units finish weakened enemies instead of spreading damage.
+  - Attackers defend themselves before continuing toward the base.
+
+  This would immediately make combat feel more intentional without changing the overall AI structure.
+
+  2. Tactical positioning — low-to-medium effort
+
+  Improve how units behave during fights:
+
+  - Archers maintain distance and retreat when enemies get too close.
+  - Swordsmen screen in front of archers.
+  - Units spread out instead of occupying the same position.
+  - Archers focus fire while swordsmen distribute themselves across nearby threats.
+
+  This is probably the best value-for-effort upgrade.
+
+  3. Squad attacks — medium effort
+
+  Instead of sending every unit out immediately, the AI could:
+
+  - Gather units near its base.
+  - Wait until it has a useful composition or army size.
+  - Form a squad with swordsmen in front and archers behind.
+  - Launch coordinated attack waves.
+  - Replace losses before starting another wave.
+
+  This creates recognizable attacks and gives the player meaningful periods to prepare.
+
+  4. Base defense — medium effort
+
+  The enemy currently abandons its base. A defensive system could:
+
+  - Keep a small reserve force near the Crimson Hold.
+  - Detect player units approaching the base.
+  - Recall nearby attackers when the base is threatened.
+  - Produce swordsmen urgently when enemies reach close range.
+  - Resume attacking after the danger passes.
+
+  This would stop small groups from exploiting an undefended enemy base.
+
+  5. Strategic production — medium effort
+
+  Replace the random 40% archer choice with decisions based on battlefield conditions:
+
+  - Produce archers against swordsman-heavy armies.
+  - Produce swordsmen when the player has many archers.
+  - Save essence for expensive archers when appropriate.
+  - Favor cheaper units during emergencies.
+  - Adjust army composition based on recent losses.
+
+  This works especially well when combined with squads or base defense.
+
+  6. Multiple AI personalities — medium-to-high effort
+
+  Add difficulty or behavior profiles:
+
+  - Aggressive: frequent small attacks.
+  - Defensive: builds a large army and guards its base.
+  - Balanced: maintains defenders and launches mixed waves.
+  - Reactive: counters the player’s current unit composition.
+
+  This adds replayability without requiring new unit types.
+
+  7. Full state-machine AI — highest effort, best foundation
+
+  Give the enemy explicit strategic states:
+
+  Building → Rallying → Attacking
+      ↑          ↓          ↓
+  Recovering ← Defending ← Threat detected
+
+  Each state controls recruitment, unit assignments, targets, and transitions. This would make future
+  additions—difficulty levels, scouting, flanking, or additional buildings—much easier.
+
+  My recommendation is a combined “smart squad AI”:
+
+  - Threat-aware target selection
+  - Archer kiting
+  - Swordsmen protecting archers
+  - Mixed attack waves
+  - Two or three permanent base defenders
+  - Production that reacts to the player’s army
+
+  That would produce the largest noticeable improvement while staying reasonably compact within the
+  current single-file architecture.

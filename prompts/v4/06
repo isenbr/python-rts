@@ -1,0 +1,51 @@
+Replace the enemy’s mostly random recruitment with strategic, deterministic production decisions
+  integrated into EnemyAI.
+
+  The AI should evaluate:
+
+  - Current enemy army composition
+  - Known or recently observed player composition
+  - Units already assigned to defense and attack squads
+  - Whether the AI is BUILDING, RALLYING, ATTACKING, DEFENDING, or RECOVERING
+  - Current essence and the benefit of saving for an archer
+  - Immediate threats requiring a cheaper swordsman
+  - Recent enemy losses, so repeated tactical failures can influence production
+
+  Implement a weighted scoring system for unit production rather than rigid counters. The AI should:
+
+  - Favor swordsmen against exposed archers and during melee emergencies
+  - Favor archers against swordsman-heavy forces when protected
+  - Maintain a viable frontline instead of producing an archer-only army
+  - Save essence for an archer when strategically justified
+  - Avoid saving indefinitely while under serious threat
+  - Use a neutral default composition when the player army is unknown
+  - Avoid using player units hidden by fog or outside the AI’s defined scouting/knowledge model
+
+  Keep production decisions on a controlled interval and expose important weights as named configuration
+  values.
+
+  Add deterministic tests covering:
+
+  - Default production with no player information
+  - Responding to swordsman-heavy and archer-heavy observed armies
+  - Maintaining a minimum frontline
+  - Saving for an archer
+  - Abandoning savings during an emergency
+  - Respecting recruitment costs and essence
+  - Behavior in every strategic AI state
+  - Stable decisions without rapid composition oscillation
+  - Expiration of stale information about the player army
+
+  After implementation:
+
+  1. Run the full automated test suite.
+  2. Run a syntax or compilation check.
+  3. Simulate multiple scenarios with different player compositions and fixed seeds.
+  4. Record the enemy units produced in each scenario.
+  5. Manually verify that strategic production works with rallying, waves, recovery, and defense.
+  6. Take screenshots only under /work/screenshots, inspect each with view_image, and report visual
+  problems.
+  7. Report production results and any counter relationships that seem too strong.
+
+  Do not change base income, unit costs, or unit statistics merely to make tests pass. Do not commit
+  changes.

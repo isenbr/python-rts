@@ -1,0 +1,42 @@
+Implement enemy base-defense behavior through the existing EnemyAI state machine.
+
+  Add a configurable defense zone around the Crimson Hold and implement:
+
+  - Detection of player units threatening or entering the defense zone
+  - Transition into DEFENDING when the threat is significant
+  - A permanent or configurable defensive reserve
+  - Assignment of nearby suitable enemy units as defenders
+  - Recall of some attacking units only when the base threat warrants it
+  - Target priority based on danger to the base
+  - Emergency swordsman recruitment when melee defense is urgently needed and essence permits
+  - Archers defending from safer positions behind the base or frontline
+  - A transition out of DEFENDING after the threat is gone for a cooldown period
+  - Surviving defenders returning to the reserve, rally group, or next attack wave
+
+  Prevent rapid state switching when a player repeatedly crosses the defense boundary. Do not let the AI
+  instantly command distant units without accounting for their travel time.
+
+  Add deterministic tests for:
+
+  - Entering DEFENDING when player units approach
+  - Ignoring harmless or very distant units
+  - Reserve units engaging first
+  - Attackers being recalled only for a sufficiently dangerous threat
+  - Emergency recruitment respecting cost and available essence
+  - Defensive target prioritization
+  - Remaining in defense briefly after the immediate threat disappears
+  - Returning to an appropriate strategic state afterward
+  - Correct behavior when the base is attacked during RALLYING, ATTACKING, or RECOVERING
+
+  After implementation:
+
+  1. Run all automated tests.
+  2. Run a syntax or compilation check.
+  3. Manually test small raids, large raids, retreating from the defense zone, and attacking while an
+  enemy wave is underway.
+  4. Confirm the enemy can still launch later attacks after successfully defending.
+  5. Take screenshots only under /work/screenshots, inspect each with view_image, and report visual
+  problems.
+  6. Report observed transitions, response times, recalled forces, and balance concerns.
+
+  Do not implement adaptive army composition until the next step. Do not commit changes.
