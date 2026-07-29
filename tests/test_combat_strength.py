@@ -10,7 +10,7 @@ from main import CombatAdvantage, Game
 class CombatStrengthAssessmentTests(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(7))
-        self.game.units.clear()
+        self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.ai = self.game.enemy_ai
         self.ai._known_red_uids.clear()
         self.ai.recruitment_timer = 999
@@ -70,7 +70,7 @@ class CombatStrengthAssessmentTests(unittest.TestCase):
         archers = self.observe(["archer"], x=34)
         sword_result = self.assess(swords, archers)
 
-        self.game.units.clear()
+        self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.ai.combat_observations.clear()
         shields = self.add_group(["shield"], x=30)
         archers = self.observe(["archer"], x=34)

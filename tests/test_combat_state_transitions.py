@@ -11,7 +11,7 @@ from simulate_enemy_ai import simulate_integrated_decision_scenario
 class CombatStateTransitionTests(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(41))
-        self.game.units.clear()
+        self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.ai = self.game.enemy_ai
         self.ai._known_red_uids.clear()
         self.ai.recruitment_timer = 999
@@ -157,11 +157,11 @@ class CombatStateTransitionTests(unittest.TestCase):
     def test_nearby_attackers_finish_low_health_base_despite_casualties(self):
         red, _ = self.attack(4, 1)
         for unit in red:
-            unit.x = self.game.player_base.x + 3
-            unit.y = self.game.player_base.y
+            unit.x = self.game.team_king("green").x + unit.attack_range
+            unit.y = self.game.team_king("green").y
         red[0].health = 0
         red[1].health = 0
-        self.game.player_base.health = 20
+        self.game.team_king("green").health = 20
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.ATTACKING)
         self.assertIsNotNone(red[2].target_pos)
@@ -169,12 +169,12 @@ class CombatStateTransitionTests(unittest.TestCase):
     def test_finish_override_yields_to_overwhelming_live_defenders(self):
         red, green = self.attack(4, 8)
         for unit in red:
-            unit.x = self.game.player_base.x + 3
-            unit.y = self.game.player_base.y
+            unit.x = self.game.team_king("green").x + 3
+            unit.y = self.game.team_king("green").y
         for index, unit in enumerate(green):
-            unit.x = self.game.player_base.x + 4
-            unit.y = self.game.player_base.y + index * .1
-        self.game.player_base.health = 20
+            unit.x = self.game.team_king("green").x + 4
+            unit.y = self.game.team_king("green").y + index * .1
+        self.game.team_king("green").health = 20
         self.ai._update_strategic_knowledge()
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RECOVERING)
@@ -218,7 +218,7 @@ class CombatStateTransitionTests(unittest.TestCase):
         red, _ = self.attack(6, 1)
         for unit in red[:3]:
             unit.health = 0
-        self.game.player_base.x = float("nan")
+        self.game.team_king("green").x = float("nan")
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RECOVERING)
 

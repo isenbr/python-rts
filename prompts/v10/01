@@ -1,0 +1,37 @@
+Work in /work on the python-rts project. Do not commit changes.
+
+Inspect and characterize the current base, unit, combat, spawning, control, AI, fog, rendering, HUD, and
+win-condition code before implementing the king and knight feature.
+
+The eventual feature is:
+- Each team has a stationary king instead of a base.
+- Each king has 700 health, 20 damage, a 0.4-second attack cooldown, 1.5-tile attack range, and a
+  1.3-tile visual footprint.
+- Each king uses a golden-crown graphic and a dedicated slash effect on every attack.
+- Two autonomous knight guards spawn beside each king, one above and one below.
+- Knights have 400 health, 10 damage, a 0.5-second attack cooldown, swordsman attack range,
+  swordsman movement speed, and a 1.15-tile visual footprint.
+- Knights attack enemies they see, chase only a short distance, and return to their guard posts.
+- Kings and knights are never purchasable and are controlled by neither the player nor EnemyAI.
+- Killing the opposing king wins; losing the friendly king defeats the player.
+- Recruited units spawn in front of their king.
+
+Map every use of Base, player_base, enemy_base, UNIT_KINDS, ENEMY_PRODUCTION_KINDS, UNIT_COSTS,
+MELEE_UNIT_KINDS, selection, orders, recruitment, visibility, target validation, combat assessment,
+defense zones, rally/attack objectives, health displays, start/reset, and victory/defeat. Pay special
+attention to places where UNIT_KINDS currently means “purchasable kinds” and places where Base gets a
+special attack-range allowance.
+
+Do not change gameplay in this step. Add characterization tests only if they are needed to protect
+behavior that later steps will deliberately replace.
+
+Checks:
+1. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+2. Run `python3 -m unittest discover -s tests`.
+3. Record exact results and identify all hard-coded base/type assumptions.
+4. Inspect `git diff --check` and `git status --short`.
+5. If a screenshot is taken, save it only under `/work/screenshots`, immediately inspect it with
+   `view_image` using its absolute path, and report every visual problem.
+
+Finish with a concise dependency map and the smallest safe implementation order. Do not implement the
+new units yet, do not add unrelated features, and do not stop with failing checks.

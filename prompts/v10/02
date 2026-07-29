@@ -1,0 +1,39 @@
+Work in /work on the python-rts project. Continue from the king/knight characterization work. Do not
+commit changes.
+
+Refactor the roster and entity model so the game can represent king and knight units without making
+them purchasable or handing them to normal player/enemy-AI control.
+
+Requirements:
+- Keep the existing swordsman, archer, and shield as the complete purchasable/production roster.
+- Add explicit king and knight unit kinds or an equally clear typed entity model.
+- Do not add king or knight entries to UNIT_COSTS, recruitment shortcuts, selection shortcuts, purchase
+  buttons, EnemyAI production choices, production-share calculations, or purchasable army counts.
+- Give kings these exact stats: 700 max health, zero movement speed, 20 damage, 0.4-second cooldown,
+  and 1.5-tile attack range.
+- Give knights these exact stats: 400 max health, swordsman speed, 10 damage, 0.5-second cooldown, and
+  exactly the same attack range as swordsman by referencing the same named value rather than copying a
+  second magic number.
+- Define explicit render/footprint scales of 1.3 for king and 1.15 for knight. Preserve the project’s
+  current collision/spacing semantics; do not invent collision gameplay merely from a render scale.
+- Add explicit role/control metadata or helper predicates so code can reliably distinguish:
+  purchasable army units, kings/objectives, autonomous guards, player-commandable units, and
+  EnemyAI-commandable units.
+- Invalid recruitment of king or knight must fail predictably without charging essence or spawning
+  anything.
+- Ensure combat-strength and composition code does not index UNIT_COSTS or matchup tables with king or
+  knight unless that subsystem intentionally supports them.
+
+Add deterministic tests covering exact stats, shared swordsman/knight speed and range, role predicates,
+render scales, rejection by recruitment, absence from production/HUD rosters, and no essence change
+after a rejected purchase.
+
+Checks:
+1. Run the new focused model/roster tests.
+2. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+3. Run `python3 -m unittest discover -s tests`.
+4. Inspect `git diff --check` and the diff for accidental balance changes to existing units.
+5. If a screenshot is taken, save it only under `/work/screenshots`, immediately inspect it with
+   `view_image` using its absolute path, and report every visual problem.
+
+Do not replace the bases or implement guard AI yet. Do not stop with failing checks.

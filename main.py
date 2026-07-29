@@ -33,16 +33,30 @@ TERRAIN_SEED = 4729
 GROUND_COLOR = (76, 109, 60)
 TERRAIN_DETAIL_MIN_ZOOM = 7
 UNIT_KINDS = ("swordsman", "archer", "shield")
-ENEMY_PRODUCTION_KINDS = UNIT_KINDS
+PURCHASABLE_UNIT_KINDS = UNIT_KINDS
+OBJECTIVE_UNIT_KINDS = ("king",)
+AUTONOMOUS_GUARD_KINDS = ("knight",)
+ALL_UNIT_KINDS = (
+    *PURCHASABLE_UNIT_KINDS,
+    *OBJECTIVE_UNIT_KINDS,
+    *AUTONOMOUS_GUARD_KINDS,
+)
+ENEMY_PRODUCTION_KINDS = PURCHASABLE_UNIT_KINDS
 MELEE_UNIT_KINDS = ("swordsman", "shield")
 SWORDSMAN_BASE_SPEED = 1
+SWORDSMAN_ATTACK_RANGE = 1.02
+UNIT_VISION_RADIUS = 8.0
+# Guards may leave their post by at most three tiles.  This deliberately short
+# leash lets them intercept nearby attackers without turning them into roaming
+# army units.
+GUARD_LEASH_DISTANCE = 3.0
 UNIT_STATS = {
     "swordsman": {
         "max_health": 100,
         "speed": SWORDSMAN_BASE_SPEED,
         "damage": 5,
         "cooldown": .5,
-        "attack_range": 1.02,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
     },
     "archer": {
         "max_health": 20,
@@ -56,7 +70,21 @@ UNIT_STATS = {
         "speed": .8,
         "damage": 5,
         "cooldown": 1,
-        "attack_range": 1.02,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
+    },
+    "king": {
+        "max_health": 700,
+        "speed": 0,
+        "damage": 20,
+        "cooldown": .4,
+        "attack_range": 1.5,
+    },
+    "knight": {
+        "max_health": 400,
+        "speed": SWORDSMAN_BASE_SPEED,
+        "damage": 10,
+        "cooldown": .5,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
     },
 }
 ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER = .3
@@ -65,8 +93,11 @@ UNIT_RENDER_SCALES = {
     "swordsman": 1.55,
     "archer": 1.55,
     "shield": 1.55 * 1.15,
+    "king": 1.3,
+    "knight": 1.15,
 }
 MIN_UNIT_RENDER_SIZE = 8
+KING_SLASH_LIFETIME = .20
 RECRUIT_SHORTCUTS = {
     pygame.K_s: "swordsman",
     pygame.K_a: "archer",
@@ -79,9 +110,19 @@ SELECTION_SHORTCUTS = {
     pygame.K_3: None,
 }
 
-PLAYER_BASE_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
-ENEMY_BASE_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
-CAMERA_START = (PLAYER_BASE_POSITION[0] + 2.5, MAP_CENTER + .5)
+GREEN_KING_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
+RED_KING_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
+CAMERA_START = (GREEN_KING_POSITION[0] + 2.5, MAP_CENTER + .5)
+KING_GUARD_POST_ABOVE_OFFSET = (0, -3.0)
+KING_GUARD_POST_BELOW_OFFSET = (0, 3.0)
+KING_GUARD_POST_OFFSETS = (
+    KING_GUARD_POST_ABOVE_OFFSET,
+    KING_GUARD_POST_BELOW_OFFSET,
+)
+RECRUIT_FORWARD_OFFSET = 4.0
+RECRUIT_FIRST_LATERAL_OFFSET = 1.5
+RECRUIT_LATERAL_SPACING = 1.25
+RECRUIT_SLOTS_PER_COLUMN = 4
 PLAYER_STARTING_UNITS = (
     ("swordsman", 5, -1),
     ("swordsman", 5, 2),
@@ -139,6 +180,7 @@ class Unit:
     tactical_pos: Optional[tuple[float, float]] = None
     tactical_timer: float = 0
     moved_this_update: bool = False
+    home_position: Optional[tuple[float, float]] = None
 
     def __post_init__(self):
         try:
@@ -152,16 +194,25 @@ class Unit:
         self.attack_range = stats["attack_range"]
         self.health = self.max_health
 
+    @property
+    def is_purchasable_army_unit(self):
+        return self.kind in PURCHASABLE_UNIT_KINDS
 
-@dataclass
-class Base:
-    team: str
-    x: float
-    y: float
-    health: float = 250
-    max_health: float = 250
-    attack_timer: float = 0
-    flash: float = 0
+    @property
+    def is_king_objective(self):
+        return self.kind in OBJECTIVE_UNIT_KINDS
+
+    @property
+    def is_autonomous_guard(self):
+        return self.kind in AUTONOMOUS_GUARD_KINDS
+
+    @property
+    def is_player_commandable(self):
+        return self.team == "green" and self.is_purchasable_army_unit
+
+    @property
+    def is_enemy_ai_commandable(self):
+        return self.team == "red" and self.is_purchasable_army_unit
 
 
 class AIState(Enum):
@@ -170,6 +221,18 @@ class AIState(Enum):
     ATTACKING = auto()
     DEFENDING = auto()
     RECOVERING = auto()
+
+
+@dataclass
+class SlashEffect:
+    """One deterministic king swipe, stored in world coordinates."""
+
+    x: float
+    y: float
+    dx: float
+    dy: float
+    life: float
+    team: str
 
 
 class CombatAdvantage(Enum):
@@ -279,6 +342,23 @@ class CombatStrengthEvaluator:
         """Return an assessment; opponents must be observation snapshots."""
         group = tuple(sorted(group, key=lambda unit: unit.uid))
         opponents = tuple(sorted(opponents, key=lambda unit: unit.uid))
+        own_reinforcements = tuple(own_reinforcements)
+        opponent_reinforcements = tuple(opponent_reinforcements)
+        evaluated_units = (
+            *group,
+            *opponents,
+            *own_reinforcements,
+            *opponent_reinforcements,
+        )
+        unsupported = sorted({
+            unit.kind for unit in evaluated_units
+            if unit.kind not in PURCHASABLE_UNIT_KINDS
+        })
+        if unsupported:
+            raise ValueError(
+                "Combat strength supports purchasable army units only; "
+                f"unsupported kinds: {', '.join(unsupported)}"
+            )
         if not group:
             raise ValueError("A combat group must contain at least one unit")
         key = tuple(unit.uid for unit in group)
@@ -370,7 +450,7 @@ class EnemyAI:
 
     AWARENESS_RADIUS = 10.0
     ARCHER_PROTECTION_RADIUS = 4.0
-    BASE_DEFENSE_RADIUS = 14.0
+    KING_DEFENSE_RADIUS = 14.0
     SWITCH_MARGIN = 18.0
     ARCHER_DANGER_RADIUS = 3.25
     ARCHER_SAFE_RADIUS = 4.25
@@ -410,7 +490,7 @@ class EnemyAI:
     PRODUCTION_INTERVAL = 6.5
     PLAYER_KNOWLEDGE_TTL = 18.0
     SCOUTING_RADIUS = 10.0
-    KEEP_VISION_RADIUS = 16.0
+    KING_VISION_RADIUS = 16.0
     MIN_FRONTLINE = 2
     FRONTLINE_RATIO = .5
     SCORE_HYSTERESIS = 8.0
@@ -461,7 +541,7 @@ class EnemyAI:
     FRONTLINE_SHORTAGE_SHIELD_BONUS = 40.0
     DURABLE_FRONTLINE_BONUS = 18.0
     SQUAD_SHIELD_SHORTAGE_BONUS = 26.0
-    BASE_DEFENSE_SHIELD_BONUS = 28.0
+    KING_DEFENSE_SHIELD_BONUS = 28.0
     PROTECTED_ARCHER_BONUS = 14.0
     MISSING_BACKLINE_BONUS = 20.0
     UNPROTECTED_ARCHER_PENALTY = 34.0
@@ -565,20 +645,20 @@ class EnemyAI:
 
     @property
     def rally_point(self):
-        """A fixed staging point between the Crimson Hold and the battlefield."""
+        """A fixed staging point between the Crimson King and the battlefield."""
         direction_x, direction_y = self._unit_vector(
-            (self.game.enemy_base.x, self.game.enemy_base.y),
-            (self.game.player_base.x, self.game.player_base.y),
+            (self.game.team_king("red").x, self.game.team_king("red").y),
+            (self.game.team_king("green").x, self.game.team_king("green").y),
         )
         return (
-            self.game.enemy_base.x + direction_x * self.RALLY_DISTANCE,
-            self.game.enemy_base.y + direction_y * self.RALLY_DISTANCE,
+            self.game.team_king("red").x + direction_x * self.RALLY_DISTANCE,
+            self.game.team_king("red").y + direction_y * self.RALLY_DISTANCE,
         )
 
     def _living_red_units(self):
         return [
             unit for unit in self.game.units
-            if unit.team == "red" and unit.health > 0
+            if unit.is_enemy_ai_commandable and unit.health > 0
         ]
 
     def _squad_units(self):
@@ -616,8 +696,8 @@ class EnemyAI:
         index = role_units.index(unit)
         lateral = (index - (len(role_units) - 1) / 2) * self.FRONT_SPACING
         advance_x, advance_y = self._unit_vector(
-            (self.game.enemy_base.x, self.game.enemy_base.y),
-            (self.game.player_base.x, self.game.player_base.y),
+            (self.game.team_king("red").x, self.game.team_king("red").y),
+            (self.game.team_king("green").x, self.game.team_king("green").y),
         )
         side_x, side_y = -advance_y, advance_x
         forward_offset = self.FORMATION_FORWARD_OFFSETS[role]
@@ -638,7 +718,7 @@ class EnemyAI:
             max(0, len(self._living_red_units()) - self.MIN_SQUAD_STRENGTH),
         )
         reserve_needed = max(0, desired_reserve - len(self.reserve))
-        base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
         reserve_candidates = list(available)
         reserve_has_shield = any(
             unit.kind == "shield" and unit.uid in self.reserve
@@ -652,7 +732,7 @@ class EnemyAI:
                 key=lambda member: (
                     member.kind == "shield" if reserve_has_shield
                     else member.kind != "shield",
-                    dist((member.x, member.y), base_pos),
+                    dist((member.x, member.y), king_pos),
                     member.uid,
                 ),
             )
@@ -674,29 +754,29 @@ class EnemyAI:
     def _reserve_position(self, unit):
         index = sorted(self.reserve).index(unit.uid) if unit.uid in self.reserve else 0
         return (
-            self.game.enemy_base.x - 3.0,
-            self.game.enemy_base.y + (index - (len(self.reserve) - 1) / 2) * 1.8,
+            self.game.team_king("red").x - 3.0,
+            self.game.team_king("red").y + (index - (len(self.reserve) - 1) / 2) * 1.8,
         )
 
     def _player_threats(self):
-        base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
         radius = (
             self.DEFENSE_EXIT_RADIUS
             if self.state == AIState.DEFENDING else self.DEFENSE_ZONE_RADIUS
         )
         threats = []
         for unit in self.game.units:
-            if unit.team != "green" or unit.health <= 0:
+            if not unit.is_player_commandable or unit.health <= 0:
                 continue
-            distance = dist((unit.x, unit.y), base_pos)
-            attacking_base = unit.target is self.game.enemy_base
-            destination_near_base = (
+            distance = dist((unit.x, unit.y), king_pos)
+            attacking_king = unit.target is self.game.team_king("red")
+            destination_near_king = (
                 unit.target_pos is not None
-                and dist(unit.target_pos, base_pos) <= self.DEFENSE_ZONE_RADIUS
+                and dist(unit.target_pos, king_pos) <= self.DEFENSE_ZONE_RADIUS
             )
             approaching = (
                 distance <= self.DEFENSE_APPROACH_RADIUS
-                and (attacking_base or destination_near_base)
+                and (attacking_king or destination_near_king)
             )
             if distance <= radius or approaching:
                 danger = {
@@ -705,13 +785,13 @@ class EnemyAI:
                     "shield": 2.4,
                 }[unit.kind]
                 danger *= max(.25, unit.health / unit.max_health)
-                if attacking_base:
+                if attacking_king:
                     danger += 2.5
-                elif destination_near_base:
+                elif destination_near_king:
                     danger += .75
                 # Units in the hysteresis band count only if they are still advancing.
                 if distance > self.DEFENSE_ZONE_RADIUS and not (
-                    attacking_base or destination_near_base
+                    attacking_king or destination_near_king
                 ):
                     danger *= .35
                 threats.append((unit, danger))
@@ -722,8 +802,10 @@ class EnemyAI:
         if observers is None:
             observers = self._living_red_units()
         position = (unit.x, unit.y)
-        if dist(position, (self.game.enemy_base.x, self.game.enemy_base.y)) <= (
-            self.KEEP_VISION_RADIUS
+        red_objective = self.game.objective_position("red")
+        if (
+            red_objective is not None
+            and dist(position, red_objective) <= self.KING_VISION_RADIUS
         ):
             return True
         return any(
@@ -732,11 +814,11 @@ class EnemyAI:
         )
 
     def _update_strategic_knowledge(self):
-        """Remember only player units actually observed by red scouts or the keep."""
+        """Remember only player units actually observed by red scouts or the king."""
         observers = self._living_red_units()
         currently_observed = set()
         for unit in sorted(self.game.units, key=lambda candidate: candidate.uid):
-            if unit.team != "green":
+            if not unit.is_player_commandable:
                 continue
             if self._player_unit_is_visible(unit, observers):
                 if unit.health <= 0:
@@ -796,7 +878,7 @@ class EnemyAI:
         """Compare a red group with only the opponents in established memory."""
         group = tuple(
             unit for unit in group
-            if unit.team == "red" and unit.health > 0
+            if unit.is_enemy_ai_commandable and unit.health > 0
         )
         if not group:
             raise ValueError("A combat group must contain living red units")
@@ -906,7 +988,7 @@ class EnemyAI:
 
     def _attack_objective_is_reachable(self):
         """Return whether the open battlefield has a usable attack objective."""
-        objective = self.game.player_base
+        objective = self.game.team_king("green")
         if objective is None or objective.health <= 0:
             return False
         return (
@@ -936,14 +1018,14 @@ class EnemyAI:
         )
 
     def _can_finish_objective(self, assessment):
-        """Keep firing on a nearly destroyed keep unless defenders dominate."""
-        objective = self.game.player_base
+        """Keep firing on a nearly defeated king unless defenders dominate."""
+        objective = self.game.team_king("green")
         if objective is None or objective.health <= 0:
             return False
         attackers = [
             unit for unit in self._squad_units()
             if dist((unit.x, unit.y), (objective.x, objective.y))
-            <= unit.attack_range + 2.3
+            <= unit.attack_range
         ]
         if not attackers:
             return False
@@ -1064,7 +1146,7 @@ class EnemyAI:
         for kind in scores:
             scores[kind] += self.STATE_PRODUCTION_WEIGHTS[self.state][kind]
 
-        # Unknown armies use the neutral base weights; sightings add soft counters.
+        # Unknown armies use the neutral baseline weights; sightings add soft counters.
         if known_total:
             scores["swordsman"] += (
                 known["archer"] / known_total * self.EXPOSED_ARCHER_SWORD_BONUS
@@ -1110,7 +1192,7 @@ class EnemyAI:
         if squad_counts["archer"] and squad_counts["shield"] == 0:
             scores["shield"] += self.SQUAD_SHIELD_SHORTAGE_BONUS
         if self.state == AIState.DEFENDING:
-            scores["shield"] += self.BASE_DEFENSE_SHIELD_BONUS
+            scores["shield"] += self.KING_DEFENSE_SHIELD_BONUS
 
         if threat_score >= self.SERIOUS_THREAT_SCORE:
             scores["swordsman"] += self.EMERGENCY_SWORD_BONUS
@@ -1248,13 +1330,13 @@ class EnemyAI:
         return None
 
     def _defensive_target_score(self, target):
-        base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
-        distance = dist((target.x, target.y), base_pos)
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
+        distance = dist((target.x, target.y), king_pos)
         score = 120.0 - distance * 6.0
-        if target.target is self.game.enemy_base:
+        if target.target is self.game.team_king("red"):
             score += 90.0
         if target.target_pos is not None:
-            score += max(0.0, 30.0 - dist(target.target_pos, base_pos) * 2.0)
+            score += max(0.0, 30.0 - dist(target.target_pos, king_pos) * 2.0)
         score += (1.0 - target.health / target.max_health) * 12.0
         if target.kind == "archer":
             score += 8.0
@@ -1271,15 +1353,15 @@ class EnemyAI:
         red_units = self._living_red_units()
         by_uid = {unit.uid: unit for unit in red_units}
         selected = [by_uid[uid] for uid in sorted(self.reserve) if uid in by_uid]
-        base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
         nearby = [
             unit for unit in red_units
             if unit.uid not in self.defenders and unit.uid not in self.reserve
             and unit.uid not in self.squad
-            and dist((unit.x, unit.y), base_pos) <= self.DEFENDER_ASSIGN_RADIUS
+            and dist((unit.x, unit.y), king_pos) <= self.DEFENDER_ASSIGN_RADIUS
         ]
         selected.extend(sorted(
-            nearby, key=lambda unit: (dist((unit.x, unit.y), base_pos), unit.uid)
+            nearby, key=lambda unit: (dist((unit.x, unit.y), king_pos), unit.uid)
         ))
         if threat_score >= self.RECALL_THREAT_THRESHOLD:
             attackers = [
@@ -1289,7 +1371,7 @@ class EnemyAI:
             needed = max(1, math.ceil(threat_score / 2) - len(selected))
             selected.extend(sorted(
                 attackers,
-                key=lambda unit: (dist((unit.x, unit.y), base_pos), unit.uid),
+                key=lambda unit: (dist((unit.x, unit.y), king_pos), unit.uid),
             )[:needed])
         self.defenders.update(unit.uid for unit in selected)
 
@@ -1298,16 +1380,16 @@ class EnemyAI:
             key=lambda target: (-self._defensive_target_score(target), target.uid),
         )
         advance = self._unit_vector(
-            base_pos, (self.game.player_base.x, self.game.player_base.y)
+            king_pos, (self.game.team_king("green").x, self.game.team_king("green").y)
         )
         for index, unit in enumerate(selected):
             unit.target = None
             if unit.kind == "archer":
-                # Fire from the far side of the keep, away from the incoming line.
+                # Fire from the far side of the king, away from the incoming line.
                 side = (index % 3 - 1) * 1.8
                 unit.target_pos = (
-                    self.game.enemy_base.x - advance[0] * self.ARCHER_DEFENSE_OFFSET,
-                    self.game.enemy_base.y - advance[1] * self.ARCHER_DEFENSE_OFFSET + side,
+                    self.game.team_king("red").x - advance[0] * self.ARCHER_DEFENSE_OFFSET,
+                    self.game.team_king("red").y - advance[1] * self.ARCHER_DEFENSE_OFFSET + side,
                 )
             elif ordered_threats:
                 target = ordered_threats[index % len(ordered_threats)]
@@ -1461,8 +1543,8 @@ class EnemyAI:
         if not members:
             return
         advance_x, advance_y = self._unit_vector(
-            (self.game.enemy_base.x, self.game.enemy_base.y),
-            (self.game.player_base.x, self.game.player_base.y),
+            (self.game.team_king("red").x, self.game.team_king("red").y),
+            (self.game.team_king("green").x, self.game.team_king("green").y),
         )
         formation_progress = {
             unit.uid: (
@@ -1477,7 +1559,7 @@ class EnemyAI:
             self.WAVE_COHESION_TOLERANCE
             - max(self.FORMATION_FORWARD_OFFSETS.values()),
         )
-        objective = (self.game.player_base.x, self.game.player_base.y)
+        objective = (self.game.team_king("green").x, self.game.team_king("green").y)
         for unit in members:
             if unit.target is not None:
                 continue
@@ -1498,10 +1580,10 @@ class EnemyAI:
         self.transition_to(AIState.RECOVERING)
         self.recovery_elapsed = 0.0
         members = self._squad_units()
-        player_base = (self.game.player_base.x, self.game.player_base.y)
+        player_king_pos = (self.game.team_king("green").x, self.game.team_king("green").y)
         guards = sorted(
             (unit for unit in members if unit.kind == "shield"),
-            key=lambda unit: (dist((unit.x, unit.y), player_base), unit.uid),
+            key=lambda unit: (dist((unit.x, unit.y), player_king_pos), unit.uid),
         )[:2]
         self.recovery_guards = {unit.uid for unit in guards}
         for unit in members:
@@ -1529,9 +1611,8 @@ class EnemyAI:
             return False
         if getattr(target, "team", unit.team) == unit.team:
             return False
-        target_range = unit.attack_range + (2.5 if isinstance(target, Base) else 0)
         return dist((unit.x, unit.y), (target.x, target.y)) <= max(
-            self.AWARENESS_RADIUS, target_range
+            self.AWARENESS_RADIUS, unit.attack_range
         )
 
     def _threatens(self, target, protected):
@@ -1546,7 +1627,7 @@ class EnemyAI:
         distance = dist((unit.x, unit.y), (target.x, target.y))
         score = 100.0 - distance * 5.0
 
-        if isinstance(target, Base):
+        if target.is_king_objective:
             return score - 20.0
 
         # Active attackers are urgent, especially when they threaten this unit.
@@ -1587,20 +1668,24 @@ class EnemyAI:
         ):
             score += 32.0
 
-        # Units approaching or attacking the red keep receive defensive priority.
-        if (
-            dist((target.x, target.y), (self.game.enemy_base.x, self.game.enemy_base.y))
-            <= self.BASE_DEFENSE_RADIUS
-            or target.target is self.game.enemy_base
+        # Units approaching or attacking the red king receive defensive priority.
+        protected_king = self.game.team_king("red")
+        if protected_king is not None and (
+            dist((target.x, target.y), (protected_king.x, protected_king.y))
+            <= self.KING_DEFENSE_RADIUS
+            or target.target is protected_king
         ):
             score += 70.0
         return score
 
     def choose_target(self, unit):
+        if not unit.is_enemy_ai_commandable:
+            unit.target = None
+            return None
         # A recovering squad has received an explicit retreat order. Local
         # awareness must not turn that order back into an individual attack;
         # the strategic controller will either re-engage the whole squad or
-        # interrupt recovery to defend the keep.
+        # interrupt recovery to defend the king.
         if self.state == AIState.RECOVERING and unit.uid in self.squad:
             if unit.uid in self.recovery_guards:
                 candidates = [
@@ -1626,8 +1711,8 @@ class EnemyAI:
             opponent for opponent in self.game.units
             if opponent.team != unit.team and self._is_valid_target(unit, opponent)
         ]
-        if self._is_valid_target(unit, self.game.player_base):
-            candidates.append(self.game.player_base)
+        if self._is_valid_target(unit, self.game.team_king("green")):
+            candidates.append(self.game.team_king("green"))
 
         current = unit.target if self._is_valid_target(unit, unit.target) else None
         if not candidates:
@@ -1661,8 +1746,8 @@ class EnemyAI:
         """Keep local steering subordinate to the current strategic posture."""
         x, y = position
         if self.state == AIState.DEFENDING:
-            anchor = (self.game.enemy_base.x, self.game.enemy_base.y)
-            radius = self.BASE_DEFENSE_RADIUS
+            anchor = (self.game.team_king("red").x, self.game.team_king("red").y)
+            radius = self.KING_DEFENSE_RADIUS
         elif self.state in (AIState.RALLYING, AIState.BUILDING, AIState.RECOVERING):
             anchor = unit.target_pos or (unit.x, unit.y)
             radius = self.RALLY_LEASH
@@ -1679,7 +1764,11 @@ class EnemyAI:
     def _separation_vector(self, unit):
         sx = sy = 0.0
         for other in self.game.units:
-            if other is unit or other.team != unit.team or other.health <= 0:
+            if (
+                other is unit
+                or not other.is_enemy_ai_commandable
+                or other.health <= 0
+            ):
                 continue
             dx, dy = unit.x - other.x, unit.y - other.y
             distance = math.hypot(dx, dy)
@@ -1696,6 +1785,9 @@ class EnemyAI:
 
     def tactical_destination(self, unit, dt):
         """Return a short-lived local steering goal for enemy units only."""
+        if not unit.is_enemy_ai_commandable:
+            unit.tactical_pos = None
+            return None
         unit.tactical_timer = max(0.0, unit.tactical_timer - dt)
         if (
             self.state == AIState.RECOVERING
@@ -1726,7 +1818,7 @@ class EnemyAI:
                 threat_distance >= self.ARCHER_DANGER_RADIUS
                 and target is not None
                 and dist((unit.x, unit.y), (target.x, target.y))
-                <= unit.attack_range + (2.3 if isinstance(target, Base) else 0)
+                <= unit.attack_range
             ):
                 unit.tactical_pos = None
                 unit.tactical_timer = 0
@@ -2000,11 +2092,20 @@ class Game:
 
     def reset(self):
         self.units: list[Unit] = []
-        self.player_base = Base("green", *PLAYER_BASE_POSITION)
-        self.enemy_base = Base("red", *ENEMY_BASE_POSITION)
         self.essence = 400.0
         self.enemy_essence = 500.0
         self.uid = 0
+        green_king = self.add_unit("king", "green", *GREEN_KING_POSITION)
+        red_king = self.add_unit("king", "red", *RED_KING_POSITION)
+        green_king.home_position = GREEN_KING_POSITION
+        red_king.home_position = RED_KING_POSITION
+        for king in (green_king, red_king):
+            for guard_offset in KING_GUARD_POST_OFFSETS:
+                guard_post = clamp_to_map(
+                    offset_from((king.x, king.y), guard_offset)
+                )
+                guard = self.add_unit("knight", king.team, *guard_post)
+                guard.home_position = guard_post
         self.camera = list(CAMERA_START)
         self.zoom = 13.0
         self.clamp_camera()
@@ -2017,17 +2118,42 @@ class Game:
         self.drag_now = None
         self.arrows = []
         self.particles = []
-        self.message = "Destroy the Crimson Hold"
+        self.king_slashes: list[SlashEffect] = []
+        self.message = "Defeat the Crimson King"
         self.message_time = 4
         self.winner = None
         self.essence_tick = 0
         self.reveal_tick = 0
         self.terrain = self.make_terrain()
         for kind, dx, dy in PLAYER_STARTING_UNITS:
-            self.add_unit(kind, "green", *offset_from(PLAYER_BASE_POSITION, (dx, dy)))
+            self.add_unit(kind, "green", *offset_from(GREEN_KING_POSITION, (dx, dy)))
         for kind, dx, dy in ENEMY_STARTING_UNITS:
-            self.add_unit(kind, "red", *offset_from(ENEMY_BASE_POSITION, (dx, dy)))
+            self.add_unit(kind, "red", *offset_from(RED_KING_POSITION, (dx, dy)))
         self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
+
+    def team_king(self, team):
+        """Return the team's live strategic objective, if it still exists."""
+        return next(
+            (
+                unit for unit in self.units
+                if unit.team == team
+                and unit.is_king_objective
+                and unit.health > 0
+            ),
+            None,
+        )
+
+    def objective_for(self, attacking_team):
+        """Return the live opposing king that a team must destroy."""
+        return self.team_king("red" if attacking_team == "green" else "green")
+
+    def objective_position(self, team):
+        king = self.team_king(team)
+        return (king.x, king.y) if king is not None else None
+
+    def objective_health(self, team):
+        king = self.team_king(team)
+        return max(0, king.health) if king is not None else 0
 
     def make_terrain(self):
         rng = random.Random(TERRAIN_SEED)
@@ -2035,10 +2161,10 @@ class Game:
         self.terrain_tones = {}
         self.terrain_details = {}
         quiet_zones = (
-            (self.player_base.x, self.player_base.y, 4.5),
-            (*offset_from(PLAYER_BASE_POSITION, (5.5, .5)), 3.5),
-            (self.enemy_base.x, self.enemy_base.y, 4.5),
-            (*offset_from(ENEMY_BASE_POSITION, (-5.5, .5)), 3.5),
+            (self.team_king("green").x, self.team_king("green").y, 4.5),
+            (*offset_from(GREEN_KING_POSITION, (5.5, .5)), 3.5),
+            (self.team_king("red").x, self.team_king("red").y, 4.5),
+            (*offset_from(RED_KING_POSITION, (-5.5, .5)), 3.5),
         )
         for x in range(MAP_SIZE):
             for y in range(MAP_SIZE):
@@ -2073,7 +2199,7 @@ class Game:
         return terrain
 
     def add_unit(self, kind, team, x, y):
-        if kind not in UNIT_KINDS:
+        if kind not in ALL_UNIT_KINDS:
             raise ValueError(f"Invalid unit kind: {kind!r}")
         self.uid += 1
         unit = Unit(kind, team, x, y, uid=self.uid)
@@ -2105,7 +2231,9 @@ class Game:
         )
 
     def recruit(self, kind, team="green"):
-        if kind not in UNIT_KINDS:
+        if kind in ALL_UNIT_KINDS and kind not in PURCHASABLE_UNIT_KINDS:
+            return False
+        if kind not in ALL_UNIT_KINDS:
             raise ValueError(f"Invalid unit kind: {kind!r}")
         cost = UNIT_COSTS[kind]
         wallet = self.essence if team == "green" else self.enemy_essence
@@ -2115,25 +2243,38 @@ class Game:
             return False
         if team == "green":
             self.essence -= cost
-            base, direction = self.player_base, 1
+            spawn_king, direction = self.team_king("green"), 1
         else:
             self.enemy_essence -= cost
-            base, direction = self.enemy_base, -1
-        count = sum(u.team == team for u in self.units)
-        y = base.y + 1.5 + (count % 4) * 1.25
-        u = self.add_unit(kind, team, base.x + direction * 4, y)
+            spawn_king, direction = self.team_king("red"), -1
+        count = sum(
+            u.team == team and u.is_purchasable_army_unit
+            for u in self.units
+        )
+        y = (
+            spawn_king.y + RECRUIT_FIRST_LATERAL_OFFSET
+            + (count % RECRUIT_SLOTS_PER_COLUMN) * RECRUIT_LATERAL_SPACING
+        )
+        self.add_unit(
+            kind,
+            team,
+            *clamp_to_map((spawn_king.x + direction * RECRUIT_FORWARD_OFFSET, y)),
+        )
         return True
 
     def select_kind(self, kind=None):
         for u in self.units:
-            u.selected = u.team == "green" and (kind is None or u.kind == kind)
+            u.selected = (
+                u.is_player_commandable
+                and (kind is None or u.kind == kind)
+            )
 
     def issue_order(self, world):
-        selected = [u for u in self.units if u.selected and u.team == "green"]
+        selected = [u for u in self.units if u.selected and u.is_player_commandable]
         if not selected:
             return
         visible_enemies = [u for u in self.units if u.team == "red" and self.is_visible(u.x, u.y)]
-        candidates = visible_enemies + ([self.enemy_base] if self.is_visible(self.enemy_base.x, self.enemy_base.y) else [])
+        candidates = visible_enemies
         clicked = min(candidates, key=lambda e: dist((e.x, e.y), world), default=None)
         if clicked and dist((clicked.x, clicked.y), world) < 1.5:
             for u in selected:
@@ -2157,8 +2298,15 @@ class Game:
         previous_visible = self.visible.copy()
         previous_explored_count = len(self.explored)
         self.visible.clear()
-        sources = [(self.player_base.x, self.player_base.y, 12)]
-        sources += [(u.x, u.y, 8) for u in self.units if u.team == "green"]
+        green_king = self.team_king("green")
+        sources = (
+            [(green_king.x, green_king.y, self.enemy_ai.KING_VISION_RADIUS)]
+            if green_king is not None else []
+        )
+        sources += [
+            (u.x, u.y, UNIT_VISION_RADIUS)
+            for u in self.units if u.is_player_commandable
+        ]
         for sx, sy, radius in sources:
             for x in range(max(0, int(sx - radius)), min(MAP_SIZE, int(sx + radius) + 1)):
                 for y in range(max(0, int(sy - radius)), min(MAP_SIZE, int(sy + radius) + 1)):
@@ -2170,15 +2318,77 @@ class Game:
 
     def find_target(self, unit):
         opponents = [u for u in self.units if u.team != unit.team and u.health > 0]
-        enemy_base = self.enemy_base if unit.team == "green" else self.player_base
         if unit.team == "green":
             opponents = [u for u in opponents if self.currently_visible_enemy(u)]
         in_range = [e for e in opponents if dist((unit.x, unit.y), (e.x, e.y)) <= unit.attack_range]
-        if dist((unit.x, unit.y), (enemy_base.x, enemy_base.y)) <= unit.attack_range + 2.5:
-            in_range.append(enemy_base)
-        return min(in_range, key=lambda e: dist((unit.x, unit.y), (e.x, e.y)), default=None)
+        return min(
+            in_range,
+            key=lambda e: (dist((unit.x, unit.y), (e.x, e.y)), e.uid),
+            default=None,
+        )
+
+    def autonomous_king_target(self, king):
+        """Choose the nearest local target without consulting fog or either AI."""
+        origin = king.home_position or (king.x, king.y)
+        candidates = [
+            unit for unit in self.units
+            if unit.team != king.team
+            and unit.health > 0
+            and dist(origin, (unit.x, unit.y)) <= king.attack_range
+        ]
+        return min(
+            candidates,
+            key=lambda unit: (dist(origin, (unit.x, unit.y)), unit.uid),
+            default=None,
+        )
+
+    def autonomous_guard_target(self, guard):
+        """Choose a locally seen target that can be engaged from the short leash."""
+        candidates = [
+            unit for unit in self.units
+            if self.is_valid_guard_target(guard, unit)
+        ]
+        return min(
+            candidates,
+            key=lambda unit: (
+                dist((guard.x, guard.y), (unit.x, unit.y)),
+                unit.uid,
+            ),
+            default=None,
+        )
+
+    @staticmethod
+    def is_valid_guard_target(guard, target):
+        if (
+            target is None
+            or target.team == guard.team
+            or target.health <= 0
+        ):
+            return False
+        home = guard.home_position or (guard.x, guard.y)
+        return (
+            dist((guard.x, guard.y), (target.x, target.y))
+            <= UNIT_VISION_RADIUS
+            and dist(home, (target.x, target.y))
+            <= GUARD_LEASH_DISTANCE + guard.attack_range
+        )
+
+    @staticmethod
+    def guard_chase_destination(guard, target):
+        """Clamp a pursuit point to the guard's leash circle."""
+        home = guard.home_position or (guard.x, guard.y)
+        dx, dy = target.x - home[0], target.y - home[1]
+        distance = math.hypot(dx, dy)
+        if distance <= GUARD_LEASH_DISTANCE:
+            return target.x, target.y
+        return (
+            home[0] + dx / distance * GUARD_LEASH_DISTANCE,
+            home[1] + dy / distance * GUARD_LEASH_DISTANCE,
+        )
 
     def attack(self, attacker, target):
+        if attacker.health <= 0 or target.health <= 0:
+            return
         damage = attacker.damage
         if attacker.kind == "archer" and getattr(target, "kind", None) == "shield":
             damage *= ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER
@@ -2188,6 +2398,17 @@ class Game:
         if attacker.kind == "archer":
             attacker.movement_lock_timer = 4 / 3
             self.arrows.append([attacker.x, attacker.y, target.x, target.y, .22, attacker.team])
+        elif attacker.kind == "king":
+            dx, dy = target.x - attacker.x, target.y - attacker.y
+            length = math.hypot(dx, dy)
+            if length:
+                dx, dy = dx / length, dy / length
+            self.king_slashes.append(
+                SlashEffect(
+                    attacker.x, attacker.y, dx, dy,
+                    KING_SLASH_LIFETIME, attacker.team,
+                )
+            )
         else:
             mx, my = (attacker.x + target.x) / 2, (attacker.y + target.y) / 2
             self.particles.append([mx, my, .25, attacker.team])
@@ -2209,6 +2430,28 @@ class Game:
 
     def update_unit(self, u, dt):
         u.moved_this_update = False
+        if u.health <= 0:
+            u.selected = False
+            u.target = None
+            u.target_pos = None
+            u.tactical_pos = None
+            return
+        if u.is_king_objective:
+            u.selected = False
+            u.tactical_pos = None
+            u.target_pos = None
+            if u.home_position is None:
+                u.home_position = (u.x, u.y)
+            u.x, u.y = u.home_position
+        elif u.is_autonomous_guard:
+            u.selected = False
+            u.tactical_pos = None
+            if u.home_position is None:
+                u.home_position = (u.x, u.y)
+        elif not (u.is_player_commandable or u.is_enemy_ai_commandable):
+            u.selected = False
+            u.target = None
+            u.target_pos = None
         u.attack_timer = max(0, u.attack_timer - dt)
         if u.movement_lock_timer <= dt + 1e-9:
             u.movement_lock_timer = 0
@@ -2219,12 +2462,61 @@ class Game:
         target = u.target
         if target is not None and getattr(target, "health", 0) <= 0:
             u.target = target = None
-        auto = self.enemy_ai.choose_target(u) if u.team == "red" else self.find_target(u)
+        if u.is_king_objective:
+            target = self.autonomous_king_target(u)
+            u.target = target
+            if target is not None and u.attack_timer <= 0:
+                self.attack(u, target)
+            return
+        if u.is_autonomous_guard:
+            previous_target = target
+            away_from_post = dist((u.x, u.y), u.home_position) > 1e-9
+            if away_from_post and not self.is_valid_guard_target(
+                u, previous_target
+            ):
+                u.target = None
+                u.target_pos = u.home_position
+                if dist((u.x, u.y), u.home_position) < .08:
+                    u.x, u.y = u.home_position
+                    u.target_pos = None
+                else:
+                    self.move_unit_toward(u, u.home_position, dt)
+                    if (u.x, u.y) == u.home_position:
+                        u.target_pos = None
+                return
+            target = self.autonomous_guard_target(u)
+            u.target = target
+            if target is None:
+                u.target_pos = u.home_position
+                if dist((u.x, u.y), u.home_position) < .08:
+                    u.x, u.y = u.home_position
+                    u.target_pos = None
+                else:
+                    self.move_unit_toward(u, u.home_position, dt)
+                    if (u.x, u.y) == u.home_position:
+                        u.target_pos = None
+                return
+            d = dist((u.x, u.y), (target.x, target.y))
+            if d <= u.attack_range:
+                u.target_pos = None
+                if u.attack_timer <= 0:
+                    self.attack(u, target)
+                return
+            u.target_pos = self.guard_chase_destination(u, target)
+            self.move_unit_toward(u, u.target_pos, dt)
+            return
+        if u.is_enemy_ai_commandable:
+            auto = self.enemy_ai.choose_target(u)
+        elif u.is_player_commandable:
+            auto = self.find_target(u)
+        else:
+            auto = None
         if auto is not None:
             target = auto
             u.target = auto
         tactical_pos = (
-            self.enemy_ai.tactical_destination(u, dt) if u.team == "red" else None
+            self.enemy_ai.tactical_destination(u, dt)
+            if u.is_enemy_ai_commandable else None
         )
         if tactical_pos is not None:
             if dist((u.x, u.y), tactical_pos) < .08:
@@ -2235,9 +2527,8 @@ class Game:
             elif not movement_locked and self.move_unit_toward(u, tactical_pos, dt):
                 return
         if target is not None:
-            target_range = u.attack_range + (2.3 if isinstance(target, Base) else 0)
             d = dist((u.x, u.y), (target.x, target.y))
-            if d <= target_range:
+            if d <= u.attack_range:
                 if (
                     u.attack_timer <= 0
                     and (u.kind != "archer" or not u.moved_this_update)
@@ -2260,31 +2551,48 @@ class Game:
         self.enemy_ai.update(dt)
         for u in list(self.units):
             self.update_unit(u, dt)
+        dead_units = [unit for unit in self.units if unit.health <= 0]
+        dead_green_king = any(
+            unit.team == "green" and unit.is_king_objective
+            for unit in dead_units
+        )
+        dead_red_king = any(
+            unit.team == "red" and unit.is_king_objective
+            for unit in dead_units
+        )
+        # A mutual kill is a defeat: the player must keep the Verdant King
+        # alive while destroying the Crimson King.
+        if dead_green_king:
+            self.winner = "DEFEAT"
+        elif dead_red_king:
+            self.winner = "VICTORY"
         for unit in self.units:
             if unit.team == "green" and unit.health <= 0:
                 self.enemy_ai.forget_player_unit(unit.uid)
         self.units[:] = [u for u in self.units if u.health > 0]
-        living_targets = self.units + [self.player_base, self.enemy_base]
+        living_targets = set(id(unit) for unit in self.units)
         for unit in self.units:
             if unit.target is not None and (
-                unit.target not in living_targets
+                id(unit.target) not in living_targets
                 or getattr(unit.target, "health", 0) <= 0
             ):
                 unit.target = None
+                unit.target_pos = None
         for a in self.arrows:
             a[4] -= dt
         self.arrows[:] = [a for a in self.arrows if a[4] > 0]
         for p in self.particles:
             p[2] -= dt
         self.particles[:] = [p for p in self.particles if p[2] > 0]
+        for slash in self.king_slashes:
+            slash.life -= dt
+        self.king_slashes[:] = [
+            slash for slash in self.king_slashes if slash.life > 0
+        ]
         self.reveal_tick -= dt
         if self.reveal_tick <= 0:
             self.update_visibility()
             self.reveal_tick = .12
-        if self.enemy_base.health <= 0:
-            self.winner = "VICTORY"
-        elif self.player_base.health <= 0:
-            self.winner = "DEFEAT"
 
     def draw_terrain(self):
         w, h = self.screen.get_size()
@@ -2326,27 +2634,6 @@ class Game:
                         self.screen.blit(rotated, rotated.get_rect(center=(cx, cy)))
         border = self.world_to_screen(0, 0)
         pygame.draw.rect(self.screen, (39, 54, 35), (border[0], border[1], MAP_SIZE * self.zoom, MAP_SIZE * self.zoom), max(2, int(self.zoom * .15)))
-
-    def draw_base(self, base):
-        if base.team == "red" and not self.is_visible(base.x, base.y):
-            return
-        color = GREEN if base.team == "green" else RED
-        sx, sy = self.world_to_screen(base.x - 2.5, base.y - 2.5)
-        size = 5 * self.zoom
-        r = pygame.Rect(int(sx), int(sy), int(size), int(size))
-        pygame.draw.rect(self.screen, (43, 39, 34), r, border_radius=max(2, int(self.zoom * .25)))
-        inset = r.inflate(-int(self.zoom * .7), -int(self.zoom * .7))
-        pygame.draw.rect(self.screen, color if base.flash <= 0 else CREAM, inset, border_radius=3)
-        # Corner towers and keep roof.
-        for px, py in ((r.left, r.top), (r.right, r.top), (r.left, r.bottom), (r.right, r.bottom)):
-            pygame.draw.circle(self.screen, (67, 63, 54), (px, py), max(3, int(self.zoom * .42)))
-        roof = [(r.centerx, r.top + int(size * .16)), (r.left + int(size * .22), r.centery), (r.right - int(size * .22), r.centery)]
-        pygame.draw.polygon(self.screen, (39, 76, 45) if base.team == "green" else (105, 38, 34), roof)
-        # Health bar.
-        bar = pygame.Rect(r.left, r.top - 10, r.width, 6)
-        pygame.draw.rect(self.screen, (42, 32, 31), bar, border_radius=3)
-        fill = bar.copy(); fill.width = int(bar.width * max(0, base.health / base.max_health))
-        pygame.draw.rect(self.screen, color, fill, border_radius=3)
 
     def draw_cracks(self, rect, ratio, seed):
         if ratio > .78:
@@ -2406,38 +2693,80 @@ class Game:
                 (225, 220, 196),
                 [
                     blade_end,
-                    (
-                        blade_end[0] - size * .17,
-                        blade_end[1] + size * .05,
-                    ),
-                    (
-                        blade_end[0] - size * .05,
-                        blade_end[1] + size * .17,
-                    ),
+                    (blade_end[0] - size * .17, blade_end[1] + size * .05),
+                    (blade_end[0] - size * .05, blade_end[1] + size * .17),
                 ],
             )
             pygame.draw.line(
-                self.screen,
-                (109, 67, 35),
-                (
-                    blade_start[0] - size * .1,
-                    blade_start[1] - size * .1,
-                ),
-                (
-                    blade_start[0] + size * .1,
-                    blade_start[1] + size * .1,
-                ),
+                self.screen, (109, 67, 35),
+                (blade_start[0] - size * .1, blade_start[1] - size * .1),
+                (blade_start[0] + size * .1, blade_start[1] + size * .1),
                 max(2, size // 9),
             )
             pygame.draw.line(
-                self.screen,
-                (92, 65, 39),
-                blade_start,
-                (
-                    rect.left + size * .22,
-                    rect.bottom - size * .18,
-                ),
+                self.screen, (92, 65, 39), blade_start,
+                (rect.left + size * .22, rect.bottom - size * .18),
                 max(2, size // 8),
+            )
+        elif u.kind == "king":
+            # A broad three-point crown stays legible even at the minimum
+            # footprint; the inset team tile remains visible around it.
+            outline = [
+                (rect.left + size * .16, rect.top + size * .30),
+                (rect.left + size * .23, rect.bottom - size * .18),
+                (rect.right - size * .23, rect.bottom - size * .18),
+                (rect.right - size * .16, rect.top + size * .30),
+                (rect.right - size * .35, rect.top + size * .47),
+                (rect.centerx, rect.top + size * .13),
+                (rect.left + size * .35, rect.top + size * .47),
+            ]
+            pygame.draw.polygon(self.screen, (72, 53, 24), outline)
+            crown = [
+                (rect.left + size * .22, rect.top + size * .33),
+                (rect.left + size * .28, rect.bottom - size * .24),
+                (rect.right - size * .28, rect.bottom - size * .24),
+                (rect.right - size * .22, rect.top + size * .33),
+                (rect.right - size * .37, rect.top + size * .49),
+                (rect.centerx, rect.top + size * .20),
+                (rect.left + size * .37, rect.top + size * .49),
+            ]
+            pygame.draw.polygon(self.screen, GOLD, crown)
+            pygame.draw.line(
+                self.screen, (255, 225, 122),
+                (rect.left + size * .29, rect.bottom - size * .31),
+                (rect.right - size * .29, rect.bottom - size * .31),
+                max(1, size // 10),
+            )
+        elif u.kind == "knight":
+            # Steel great helm with a dark eye slit and a team-color opening.
+            helm = pygame.Rect(
+                rect.left + size * .20, rect.top + size * .15,
+                size * .60, size * .70,
+            )
+            pygame.draw.rect(
+                self.screen, (54, 58, 59), helm.inflate(2, 2),
+                border_radius=max(2, size // 4),
+            )
+            pygame.draw.rect(
+                self.screen, (184, 193, 191), helm,
+                border_radius=max(2, size // 4),
+            )
+            pygame.draw.arc(
+                self.screen, (235, 239, 226), helm.inflate(-2, -2),
+                math.pi, math.tau, max(1, size // 10),
+            )
+            slit_y = rect.top + size * .49
+            pygame.draw.line(
+                self.screen, (41, 43, 42),
+                (rect.left + size * .25, slit_y),
+                (rect.right - size * .25, slit_y),
+                max(2, size // 8),
+            )
+            pygame.draw.line(
+                self.screen, color,
+                (rect.centerx, slit_y),
+                (rect.centerx, rect.bottom - size * .17),
+                max(2, size // 9),
             )
         if u.kind == "archer":
             arc = pygame.Rect(rect.left + size * .15, rect.top + size * .12, size * .62, size * .76)
@@ -2477,15 +2806,15 @@ class Game:
                 (rect.left + size * .29, rect.bottom - size * .28),
                 (rect.left + size * .23, rect.top + size * .3),
             ]
-            pygame.draw.polygon(self.screen, (205, 176, 91), face)
+            pygame.draw.polygon(self.screen, (225, 223, 202), face)
             pygame.draw.line(
-                self.screen, CREAM,
+                self.screen, (109, 67, 35),
                 (rect.centerx, rect.top + size * .22),
                 (rect.centerx, rect.bottom - size * .23),
                 max(2, size // 9),
             )
             pygame.draw.line(
-                self.screen, CREAM,
+                self.screen, (109, 67, 35),
                 (rect.left + size * .3, rect.centery - size * .04),
                 (rect.right - size * .3, rect.centery - size * .04),
                 max(2, size // 10),
@@ -2502,6 +2831,27 @@ class Game:
             sx, sy = self.world_to_screen(x, y)
             radius = max(2, int(self.zoom * (1 - life / .25) * .4))
             pygame.draw.circle(self.screen, CREAM, (int(sx), int(sy)), radius, 1)
+        for slash in self.king_slashes:
+            if slash.team == "red" and not self.is_visible(slash.x, slash.y):
+                continue
+            progress = 1 - slash.life / KING_SLASH_LIFETIME
+            reach = .35 + progress * .45
+            cx = slash.x + slash.dx * reach
+            cy = slash.y + slash.dy * reach
+            px, py = -slash.dy, slash.dx
+            half_width = .34
+            start = self.world_to_screen(
+                cx - slash.dx * .30 + px * half_width,
+                cy - slash.dy * .30 + py * half_width,
+            )
+            end = self.world_to_screen(
+                cx + slash.dx * .30 - px * half_width,
+                cy + slash.dy * .30 - py * half_width,
+            )
+            pygame.draw.line(
+                self.screen, (255, 225, 122), start, end,
+                max(2, round(self.zoom * .12)),
+            )
 
     def draw_fog(self):
         w, h = self.screen.get_size(); view_h = h - HUD_H
@@ -2588,7 +2938,9 @@ class Game:
             kind: sum(u.team == "green" and u.kind == kind for u in self.units)
             for kind in UNIT_KINDS
         }
-        selected = sum(u.selected for u in self.units)
+        selected = sum(
+            u.selected and u.is_player_commandable for u in self.units
+        )
         sword_label = "sword" if counts["swordsman"] == 1 else "swords"
         archer_label = "archer" if counts["archer"] == 1 else "archers"
         shield_label = "shield" if counts["shield"] == 1 else "shields"
@@ -2607,18 +2959,42 @@ class Game:
         label = self.small.render(controls, True, (165, 155, 132))
         controls_rect = label.get_rect(topleft=(245, top + 104))
         self.screen.blit(label, controls_rect)
-        # Base vitality at right.
-        base_rect = pygame.Rect(w - 210, top + 12, 190, 58)
-        self.screen.blit(self.small.render("VERDANT KEEP", True, (165, 198, 165)), (base_rect.x, top + 18))
-        self.screen.blit(self.font.render(f"{max(0, int(self.player_base.health))} / 250", True, CREAM), (base_rect.x, top + 39))
+        # Keep the objective status clear of the recruitment cards when the
+        # window is narrow.  The resource column has a reserved lower row that
+        # remains readable without compressing the three purchase buttons.
+        king_rect = (
+            pygame.Rect(55, top + 68, 170, 54)
+            if w < 1045
+            else pygame.Rect(w - 210, top + 12, 190, 58)
+        )
+        self.screen.blit(
+            self.small.render("VERDANT KING", True, (165, 198, 165)),
+            (king_rect.x, king_rect.y + 6),
+        )
+        self.screen.blit(
+            self.font.render(
+                f"{int(self.objective_health('green'))}"
+                f" / {UNIT_STATS['king']['max_health']}",
+                True,
+                CREAM,
+            ),
+            (king_rect.x, king_rect.y + 27),
+        )
         self.hud_layout = {
             "buttons": [button.rect.copy() for button, _ in self.hud_buttons],
             "army": info_rect,
             "controls": controls_rect,
-            "base": base_rect,
+            "king": king_rect,
             "hud": pygame.Rect(0, top, w, HUD_H),
         }
-        self.hud_text = {"army": info, "controls": controls}
+        self.hud_text = {
+            "army": info,
+            "controls": controls,
+            "king": (
+                f"Verdant King: {int(self.objective_health('green'))}"
+                f" / {UNIT_STATS['king']['max_health']}"
+            ),
+        }
 
     def draw_menu(self):
         w, h = self.screen.get_size()
@@ -2635,7 +3011,7 @@ class Game:
         self.screen.blit(title, (w // 2 - title.get_width() // 2, 155))
         sub = self.title.render("A MEDIEVAL RTS", True, GOLD)
         self.screen.blit(sub, (w // 2 - sub.get_width() // 2, 225))
-        lore = self.font.render("Raise your banners. Break the Crimson Hold.", True, (191, 181, 152))
+        lore = self.font.render("Raise your banners. Break the Crimson King.", True, (191, 181, 152))
         self.screen.blit(lore, (w // 2 - lore.get_width() // 2, 294))
         self.play_btn.rect.center = (w // 2, h // 2 + 110)
         self.play_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font)
@@ -2644,7 +3020,6 @@ class Game:
 
     def draw_game(self):
         self.draw_terrain()
-        self.draw_base(self.player_base); self.draw_base(self.enemy_base)
         for u in self.units: self.draw_unit(u)
         self.draw_effects(); self.draw_fog()
         if self.drag_start and self.drag_now:
@@ -2666,8 +3041,31 @@ class Game:
             color = GOLD if self.winner == "VICTORY" else (213, 91, 78)
             label = self.big.render(self.winner, True, color)
             self.screen.blit(label, label.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 25)))
-            sub = self.font.render("Press R to fight again  •  Esc for menu", True, CREAM)
-            self.screen.blit(sub, sub.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 35)))
+            result = (
+                "The Crimson King has fallen"
+                if self.winner == "VICTORY"
+                else "The Verdant King has fallen"
+            )
+            result_label = self.font.render(result, True, CREAM)
+            self.screen.blit(
+                result_label,
+                result_label.get_rect(
+                    center=(
+                        self.screen.get_width() // 2,
+                        self.screen.get_height() // 2 + 25,
+                    )
+                ),
+            )
+            sub = self.small.render("Press R to fight again  •  Esc for menu", True, CREAM)
+            self.screen.blit(
+                sub,
+                sub.get_rect(
+                    center=(
+                        self.screen.get_width() // 2,
+                        self.screen.get_height() // 2 + 60,
+                    )
+                ),
+            )
 
     def draw_pause(self):
         shade = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
@@ -2704,8 +3102,10 @@ class Game:
             elif event.key in RECRUIT_SHORTCUTS:
                 self.recruit(RECRUIT_SHORTCUTS[event.key])
             elif event.key == pygame.K_SPACE:
-                self.camera[:] = [self.player_base.x, self.player_base.y]
-                self.clamp_camera()
+                green_king = self.team_king("green")
+                if green_king is not None:
+                    self.camera[:] = [green_king.x, green_king.y]
+                    self.clamp_camera()
             elif event.key == pygame.K_r and self.winner: self.reset()
             elif event.key == pygame.K_ESCAPE:
                 self.state = "menu" if self.winner else "paused"
@@ -2734,7 +3134,7 @@ class Game:
                 for u in self.units: u.selected = False
             if rect.width < 6 and rect.height < 6:
                 world = self.screen_to_world(event.pos)
-                friends = [u for u in self.units if u.team == "green"]
+                friends = [u for u in self.units if u.is_player_commandable]
                 hit = min(friends, key=lambda u: dist((u.x, u.y), world), default=None)
                 hit_radius = .9
                 if hit:
@@ -2746,7 +3146,7 @@ class Game:
                     hit.selected = True
             else:
                 for u in self.units:
-                    if u.team == "green" and rect.collidepoint(self.world_to_screen(u.x, u.y)): u.selected = True
+                    if u.is_player_commandable and rect.collidepoint(self.world_to_screen(u.x, u.y)): u.selected = True
             self.drag_start = self.drag_now = None
 
     def run(self):

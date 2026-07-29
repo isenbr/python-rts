@@ -2,7 +2,9 @@
 """Run a configurable unit matchup in a visible Pygame window."""
 
 import argparse
+import json
 import random
+import sys
 from collections import Counter
 
 import pygame
@@ -10,10 +12,20 @@ import pygame
 from main import FPS, UNIT_COSTS, UNIT_KINDS, Game, dist
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--left", choices=UNIT_KINDS, required=True)
-    parser.add_argument("--right", choices=UNIT_KINDS, required=True)
+    parser.add_argument(
+        "--left",
+        choices=UNIT_KINDS,
+        default="swordsman",
+        help="Green unit kind (default: swordsman).",
+    )
+    parser.add_argument(
+        "--right",
+        choices=UNIT_KINDS,
+        default="archer",
+        help="Red unit kind (default: archer).",
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--budget",
@@ -47,7 +59,15 @@ def parse_args():
         default=1,
         help="Initial simulation speed multiplier (default: 1).",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="run deterministically without opening the interactive viewer",
+    )
+    raw_args = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(raw_args)
+    if not raw_args:
+        args.headless = True
     if args.counts and min(args.counts) <= 0:
         parser.error("--counts values must be positive")
     if args.budget is not None and args.budget <= 0:
@@ -85,7 +105,7 @@ class VisualMatchup:
     def reset(self):
         self.game = Game(enemy_rng=random.Random(self.args.seed))
         self.game.state = "playing"
-        self.game.units.clear()
+        self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.game.enemy_ai._known_red_uids.clear()
         self.game.enemy_ai.update = lambda dt: None
         self.game.enemy_ai.tactical_destination = lambda unit, dt: None
@@ -179,11 +199,25 @@ class VisualMatchup:
         ]
         self.game.update_visibility()
         self.elapsed += dt
-        teams = {unit.team for unit in self.game.units}
+        armies = [
+            unit for unit in self.game.units
+            if unit.is_purchasable_army_unit
+        ]
+        teams = {unit.team for unit in armies}
         if len(teams) < 2:
-            survivors = Counter(unit.kind for unit in self.game.units)
-            winner = next(iter(survivors), "draw") if survivors else "draw"
+            survivors = Counter(unit.kind for unit in armies)
+            winner = next(iter(teams), "draw")
             self.result = winner, survivors
+
+    def run_headless(self, limit=600):
+        while self.result is None and self.elapsed < limit:
+            self._step(self.FIXED_STEP)
+        winner, survivors = self.result or ("time_limit", Counter())
+        return {
+            "elapsed": round(self.elapsed, 4),
+            "winner": winner,
+            "survivors": dict(sorted(survivors.items())),
+        }
 
     def change_speed(self, direction):
         index = self.SPEEDS.index(self.speed)
@@ -249,4 +283,9 @@ class VisualMatchup:
 
 
 if __name__ == "__main__":
-    VisualMatchup(parse_args()).run()
+    parsed = parse_args()
+    matchup = VisualMatchup(parsed)
+    if parsed.headless:
+        print(json.dumps(matchup.run_headless(), sort_keys=True))
+    else:
+        matchup.run()

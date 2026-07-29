@@ -1,0 +1,46 @@
+Work in /work on the completed king-and-knight changes. Do not commit changes.
+
+Perform a final integration review and fix any defect within the requested feature scope.
+
+Verify all of the following:
+- Exactly one king and two knight guards spawn for each team on every reset.
+- The guards occupy mirrored posts above and below their king.
+- King stats are exactly 700 health, 20 damage, 0.4-second cooldown, 1.5 range, zero speed, and 1.3
+  render footprint.
+- Knight stats are exactly 400 health, 10 damage, 0.5-second cooldown, swordsman range, swordsman speed,
+  and 1.15 render footprint.
+- Neither kind is purchasable, counted as a purchasable army unit, selectable, player-orderable,
+  EnemyAI-produced, or EnemyAI squad-controlled.
+- Knights acquire enemies within vision, chase only within the named short leash, return to their
+  original posts, and behave deterministically.
+- Kings attack in range while stationary and create one dedicated slash per attack instead of the
+  ordinary melee particle.
+- Both teams recruit ordinary units in front of their own king without guard-dependent spawn jitter.
+- The opposing king’s death wins and the friendly king’s death loses.
+- Fog, targeting, persistent enemy knowledge, production shares, formation logic, simulations, HUD,
+  restart, resize, and menu/game transitions still work.
+- README controls/objective text matches the implementation.
+
+Add or consolidate an end-to-end deterministic test that runs reset, recruitment, guard engagement and
+return, king combat, effect cleanup, and victory/defeat without requiring manual input. Avoid
+frame-rate-sensitive sleeps and random outcomes.
+
+Checks:
+1. Run focused king/knight tests.
+2. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+3. Run `python3 -m unittest discover -s tests`.
+4. Run `python3 simulate_matchup.py` twice, save outputs outside `/work/screenshots`, and verify exact
+   equality.
+5. Run `python3 simulate_enemy_ai.py` twice, save outputs outside `/work/screenshots`, and verify exact
+   equality.
+6. Run every additional repository-specific validation documented in README.md.
+7. Inspect `git diff --check`, `git status --short`, and the full diff for accidental unrelated
+   changes. Never commit.
+8. Exercise the rendered game at normal zoom and at least one resized window. Save every screenshot
+   only under `/work/screenshots`; immediately inspect each with `view_image` using its absolute path
+   and report every visual problem. Fix visual regressions and repeat until clean.
+9. Do not stop with failing tests, nondeterministic output, stale base references, or known visual
+   defects.
+
+Finish with a concise summary of behavior, the chosen knight vision/leash constants, files changed,
+screenshots inspected and visual findings, and exact command results.

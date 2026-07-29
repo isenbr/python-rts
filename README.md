@@ -1,6 +1,8 @@
 # Verdant Crown
 
-A compact, self-contained medieval RTS built with Python and pygame-ce. Defend the green Verdant Keep, raise swordsmen, archers, and shields, and destroy the red Crimson Hold across a 120 x 120 tile battlefield.
+A compact, self-contained medieval RTS built with Python and pygame-ce. Keep
+the green Verdant King alive, raise swordsmen, archers, and shields, and kill
+the red Crimson King across a 120 x 120 tile battlefield.
 
 ## Run
 
@@ -15,11 +17,14 @@ python3 main.py
 - **Right click** issues a move/attack-move order.
 - **1 / 2 / 4** select every swordsman / archer / shield. **3** selects all units.
 - **WASD**, arrow keys, or moving the mouse to a screen edge pans the camera.
-- **Mouse wheel** zooms. **Space** jumps back to the Verdant Keep.
+- **Mouse wheel** zooms. **Space** jumps back to the Verdant King.
 - Click the unit cards to spend essence and recruit units. **S / A / Q** recruits a swordsman / archer / shield.
 - **Esc** pauses; **R** restarts after victory or defeat.
 
-Fog is explored permanently, but only currently visible enemies can be seen. Friendly units reveal 8 tiles and the keep reveals 12.
+Fog is explored permanently, but only currently visible enemies can be seen.
+Friendly army units reveal 8 tiles and the Verdant King reveals 12. The HUD
+shows only your king's health; the hidden Crimson King's health is never
+revealed. Kill the Crimson King to win. If the Verdant King dies, you lose.
 
 ## Enemy production tuning
 

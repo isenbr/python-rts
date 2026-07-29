@@ -1,0 +1,42 @@
+Work in /work on the python-rts project. Continue from the complete king objective behavior. Do not
+commit changes.
+
+Add the requested king, knight, and attack-effect visuals using pygame drawing primitives consistent
+with the game’s existing compact equipment-emblem style.
+
+Requirements:
+- Draw each king as a clearly recognizable golden crown on its team-colored unit tile. The crown must
+  remain readable at minimum and normal zoom, use the existing GOLD palette where appropriate, show
+  team allegiance, flash on damage, and show health/damage cracks consistently with other units.
+- Draw each knight as a clearly recognizable metal helmet on its team-colored unit tile. Use a coherent
+  metal palette, preserve team identification, damage flash, and cracks.
+- Honor the exact king render scale/footprint of 1.3 and knight scale/footprint of 1.15 as defined in
+  the model step; do not multiply them by the swordsman’s pre-existing scale unless tests/documentation
+  explicitly establish that convention.
+- Add a dedicated slash-effect collection/model for king attacks. Every successful king attack creates
+  exactly one simple short-lived slash arc or diagonal swipe oriented toward the target.
+- King attacks must not create the ordinary melee particle effect. Swordsman, shield, and knight attack
+  effects must remain unchanged unless the feature specification explicitly requires otherwise.
+- Update and render slash lifetimes deterministically and remove expired slashes.
+- Respect fog: no effect may reveal a hidden red king or hidden combat.
+- Update the HUD’s friendly objective panel to show the green king’s name and `current / 700` health
+  without overlapping existing controls at supported window sizes.
+
+Add non-visual tests for exact effect emission, exclusion of the old king attack effect, lifetime
+cleanup, effect coordinates/orientation data, and fog-safe rendering decisions where practical.
+
+Checks:
+1. Run the focused render/effect tests and the full suite.
+2. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+3. Launch the game with a deterministic or debug setup that visibly shows the green king, both green
+   guards, recruited units spawning in front, and a king slash if practical.
+4. Save every screenshot only under `/work/screenshots`. Immediately after each screenshot, call
+   `view_image` with its absolute path, inspect the rendered UI, and report every visual problem,
+   including crown/helmet readability, team clarity, scale, clipping, fog leaks, health-bar placement,
+   HUD overlap, and slash visibility.
+5. Fix observed visual problems and repeat the screenshot/inspection cycle until the requested UI is
+   legible and free of obvious overlap or clipping.
+6. Inspect `git diff --check`.
+
+Do not use external image assets and do not change unrelated art. Do not stop with failing checks or
+known visual defects.

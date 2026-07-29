@@ -1,0 +1,44 @@
+Work in /work on the python-rts project. Continue from functional king/guard combat. Do not commit
+changes.
+
+Make kings the complete strategic objective and victory condition, removing gameplay dependence on
+Base while preserving the existing EnemyAI behavior for ordinary army units.
+
+Requirements:
+- Killing the red king sets VICTORY. Killing the green king sets DEFEAT.
+- Resolve simultaneous king deaths deterministically and document the rule in a test.
+- Dead kings and knights are removed/invalidated safely, all stale targets are cleared, and no later
+  update can attack a dead objective.
+- Replace player_base/enemy_base assumptions in EnemyAI rally anchors, defense zones, objective
+  reachability, advance orders, local target priorities, visibility sources, and attack safety with
+  team-king/objective helpers.
+- Keep kings and knights out of purchasable-army strength, last-seen purchasable composition,
+  cost-weighted counter production, and wave composition unless a calculation explicitly concerns
+  objective health or attackers threatening the king.
+- Defensive logic should recognize enemies approaching or attacking the king in the same strategic
+  situations where it formerly protected the base.
+- Update the objective message, victory/defeat text if needed, README instructions, and player HUD to
+  describe king health and killing the opposing king. Do not expose hidden red-king health through the
+  HUD or AI.
+- Remove the obsolete Base dataclass and draw path once no runtime or test dependency needs them.
+  Prefer clear objective helpers over compatibility aliases named `player_base`/`enemy_base`.
+- Keep simulations and test fixtures working by updating them to the king objective model rather than
+  silently recreating fake bases.
+
+Add deterministic tests covering both win outcomes, the simultaneous-death rule, stale-target cleanup,
+AI objective reachability, rally/defense anchors, defense priority near the king, fog-safe knowledge,
+and exclusion of king/knight from cost-weighted production/composition.
+
+Checks:
+1. Run the focused objective/EnemyAI tests.
+2. Run both deterministic simulation scripts twice and compare each pair of outputs for exact
+   equality.
+3. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+4. Run `python3 -m unittest discover -s tests`.
+5. Search for `Base`, `player_base`, `enemy_base`, “keep,” “hold,” and obsolete 250-health HUD text;
+   explain any intentional remainder.
+6. Inspect `git diff --check`.
+7. If a screenshot is taken, save it only under `/work/screenshots`, immediately inspect it with
+   `view_image` using its absolute path, and report every visual problem.
+
+Do not change unrelated EnemyAI balance. Do not stop with failing checks.

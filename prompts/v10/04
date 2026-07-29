@@ -1,0 +1,44 @@
+Work in /work on the python-rts project. Continue from king/guard spawning. Do not commit changes.
+
+Implement combat behavior for stationary kings and autonomous knight guards without routing either
+kind through player commands or EnemyAI.
+
+Requirements:
+- A living king stays at its spawn position and automatically attacks the nearest valid enemy within
+  its 1.5-tile range. It never moves or chases.
+- Each knight independently detects valid enemies within the project’s normal unit vision radius,
+  attacks the nearest deterministic target, and may chase only a short, named leash distance from its
+  stored guard post.
+- Choose a conservative leash distance appropriate for “a short distance,” define it as a named
+  constant, and document the chosen value in code/tests.
+- A knight must never pursue or be tactically displaced beyond its leash boundary. Clamp chase
+  destinations if necessary.
+- When no valid enemy remains within its allowed engagement area, when a target dies, or when a target
+  escapes the leash, the knight clears combat intent and returns to its original guard post.
+- Once home, the knight remains ready to acquire another target.
+- Target selection and tie-breaking must be deterministic.
+- Guards may target opposing normal units, opposing guards, and the opposing king when legitimately in
+  range/vision.
+- Normal green units and EnemyAI-controlled red units may target kings and guards using their existing
+  visibility/information rules.
+- Remove any old Base-only `+2.3`/`+2.5` range allowance. Attacks against a king use unit-to-unit
+  range semantics based on the declared attack ranges and existing center-distance model.
+- Do not let autonomous guards leak hidden information into EnemyAI strategic memory or player
+  targeting.
+
+Add deterministic tests covering king immobility and attack cadence, knight acquisition within vision,
+nearest-target tie-breaking, pursuit inside the leash, refusal to cross the leash, target escape,
+target death, return to the exact guard post, reacquisition after returning, and independence from
+player orders and EnemyAI tactical destinations. Use controlled time steps to verify exact damage and
+cooldowns without frame-rate-sensitive assertions.
+
+Checks:
+1. Run the focused king/guard combat tests.
+2. Run them a second time and verify identical output/results.
+3. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py`.
+4. Run `python3 -m unittest discover -s tests`.
+5. Inspect `git diff --check` and search for obsolete Base-specific attack-range bonuses.
+6. If a screenshot is taken, save it only under `/work/screenshots`, immediately inspect it with
+   `view_image` using its absolute path, and report every visual problem.
+
+Do not implement final graphics yet. Do not stop with failing checks.

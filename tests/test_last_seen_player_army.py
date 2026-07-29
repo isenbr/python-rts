@@ -10,7 +10,7 @@ from main import Game, UNIT_COSTS
 class LastSeenPlayerArmyTests(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(17))
-        self.game.units.clear()
+        self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.ai = self.game.enemy_ai
         self.ai._known_red_uids.clear()
 

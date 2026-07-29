@@ -21,20 +21,20 @@ def _scenario_player_assault(game):
     game.recruit("swordsman")
     game.recruit("swordsman")
     for unit in game.units:
-        if unit.team == "green":
-            unit.target_pos = (game.enemy_base.x, game.enemy_base.y)
+        if unit.is_player_commandable:
+            unit.target_pos = (game.team_king("red").x, game.team_king("red").y)
 
 
 def _scenario_base_pressure(game):
-    """Place a visible attack group near the Crimson Hold to exercise recall."""
+    """Place a visible attack group near the Crimson King to exercise recall."""
     for index, kind in enumerate(("swordsman", "swordsman", "swordsman", "archer")):
         x, y = offset_from(
-            (game.enemy_base.x, game.enemy_base.y),
+            (game.team_king("red").x, game.team_king("red").y),
             (-17 + index * .4, -2 + index),
         )
         unit = game.add_unit(kind, "green", x, y)
-        unit.target = game.enemy_base
-        unit.target_pos = (game.enemy_base.x, game.enemy_base.y)
+        unit.target = game.team_king("red")
+        unit.target_pos = (game.team_king("red").x, game.team_king("red").y)
 
 
 SCENARIOS = {
@@ -66,8 +66,8 @@ def _observe_army(game, kinds):
     observed = [
         game.add_unit(
             kind, "green",
-            game.enemy_base.x - 5,
-            game.enemy_base.y - 4 + index * .4,
+            game.team_king("red").x - 5,
+            game.team_king("red").y - 4 + index * .4,
         )
         for index, kind in enumerate(kinds)
     ]
@@ -79,7 +79,7 @@ def simulate_integration_review(seed=73, purchases=60):
     """Report the six deterministic enemy-AI integration review scenarios."""
     # 1. With no sightings, spending converges by essence rather than unit count.
     default_game = Game(enemy_rng=random.Random(seed))
-    default_game.units.clear()
+    default_game.units[:] = [unit for unit in default_game.units if unit.is_king_objective]
     default_ai = default_game.enemy_ai
     default_ai._known_red_uids.clear()
     default_spending = _produce_fixed_sequence(
@@ -89,14 +89,14 @@ def simulate_integration_review(seed=73, purchases=60):
     # 2-3. Equal observed archer/shield essence maps to equal shield/sword
     # counters, then a new swordsman sighting redirects the target to archers.
     counter_game = Game(enemy_rng=random.Random(seed))
-    counter_game.units.clear()
+    counter_game.units[:] = [unit for unit in counter_game.units if unit.is_king_objective]
     counter_ai = counter_game.enemy_ai
     counter_ai._known_red_uids.clear()
     first_players = _observe_army(
         counter_game, ("archer",) * 3 + ("shield",) * 5
     )
     for unit in first_players:
-        unit.x = counter_game.player_base.x
+        unit.x = counter_game.team_king("green").x
     counter_ai._update_strategic_knowledge()
     first_observed = counter_ai.last_seen_player_composition()[1]
     first_target = counter_ai.production_target_shares()
@@ -104,11 +104,11 @@ def simulate_integration_review(seed=73, purchases=60):
         counter_ai, counter_game, purchases
     )
     for unit in first_players:
-        unit.x = counter_game.enemy_base.x - 5
+        unit.x = counter_game.team_king("red").x - 5
         unit.health = 0
     counter_ai._update_strategic_knowledge()
     counter_game.units[:] = [
-        unit for unit in counter_game.units if unit.team == "green"
+        unit for unit in counter_game.units if unit.is_king_objective or unit.team == "green"
     ]
     counter_ai._known_red_uids.clear()
     _observe_army(counter_game, ("swordsman",) * 5)
@@ -125,7 +125,7 @@ def simulate_integration_review(seed=73, purchases=60):
 
     # 6. Compare deterministic rank ordering at the rally and attack anchors.
     formation_game = Game(enemy_rng=random.Random(seed))
-    formation_game.units.clear()
+    formation_game.units[:] = [unit for unit in formation_game.units if unit.is_king_objective]
     formation_ai = formation_game.enemy_ai
     formation_ai._known_red_uids.clear()
     members = [
@@ -199,8 +199,8 @@ def simulate_integration_review(seed=73, purchases=60):
         "formation_rank_ordering": {
             "rally": rank_order(formation_ai.rally_point),
             "advance": rank_order((
-                formation_game.player_base.x,
-                formation_game.player_base.y,
+                formation_game.team_king("green").x,
+                formation_game.team_king("green").y,
             )),
         },
     }
@@ -209,7 +209,7 @@ def simulate_integration_review(seed=73, purchases=60):
 def simulate_launch_gate_scenario(seed=73):
     """Deterministically hold a weak wave, then permit counter reinforcements."""
     game = Game(enemy_rng=random.Random(seed))
-    game.units.clear()
+    game.units[:] = [unit for unit in game.units if unit.is_king_objective]
     ai = game.enemy_ai
     ai._known_red_uids.clear()
     ai.recruitment_timer = 999
@@ -217,7 +217,7 @@ def simulate_launch_gate_scenario(seed=73):
     players = [
         game.add_unit(
             "archer", "green",
-            game.enemy_base.x - 5, game.enemy_base.y + index,
+            game.team_king("red").x - 5, game.team_king("red").y + index,
         )
         for index in range(4)
     ]
@@ -253,7 +253,7 @@ def simulate_launch_gate_scenario(seed=73):
 def simulate_integrated_decision_scenario(seed=73):
     """Exercise production and combat-decision precedence in one fixed setup."""
     game = Game(enemy_rng=random.Random(seed))
-    game.units.clear()
+    game.units[:] = [unit for unit in game.units if unit.is_king_objective]
     game.state = "playing"
     ai = game.enemy_ai
     ai._known_red_uids.clear()
@@ -268,7 +268,7 @@ def simulate_integrated_decision_scenario(seed=73):
     revealed_archers = [
         game.add_unit(
             "archer", "green",
-            game.enemy_base.x - 5, game.enemy_base.y - 3 + index,
+            game.team_king("red").x - 5, game.team_king("red").y - 3 + index,
         )
         for index in range(ai.ARCHER_THREAT_HIGH_THRESHOLD)
     ]
@@ -389,7 +389,7 @@ def simulate(seed, scenario="idle", duration=360.0, dt=.05):
             if (
                 unit.target is not None
                 and (unit.target not in game.units and unit.target not in (
-                    game.player_base, game.enemy_base
+                    game.team_king("green"), game.team_king("red")
                 ) or getattr(unit.target, "health", 0) <= 0)
             ):
                 invalid_target_frames += 1
@@ -452,9 +452,9 @@ def simulate(seed, scenario="idle", duration=360.0, dt=.05):
         "stale_ai_unit_ids": len(
             (ai.squad | ai.reserve | ai.defenders) - living_red_ids
         ),
-        "bases": {
-            "player": max(0, round(game.player_base.health, 1)),
-            "enemy": max(0, round(game.enemy_base.health, 1)),
+        "kings": {
+            "player": round(game.objective_health("green"), 1),
+            "enemy": round(game.objective_health("red"), 1),
         },
     }
     return result
