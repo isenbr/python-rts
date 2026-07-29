@@ -3452,21 +3452,37 @@ class Game:
                 max(1, size // 10),
             )
         elif u.kind == "knight":
-            # Steel great helm with a dark eye slit and a team-color opening.
-            helm = pygame.Rect(
+            # Angular, eight-sided steel great helm with a dark eye slit and
+            # a team-color opening.
+            helm = [
+                (rect.left + size * .32, rect.top + size * .15),
+                (rect.right - size * .32, rect.top + size * .15),
+                (rect.right - size * .20, rect.top + size * .27),
+                (rect.right - size * .20, rect.bottom - size * .27),
+                (rect.right - size * .32, rect.bottom - size * .15),
+                (rect.left + size * .32, rect.bottom - size * .15),
+                (rect.left + size * .20, rect.bottom - size * .27),
+                (rect.left + size * .20, rect.top + size * .27),
+            ]
+            pygame.draw.polygon(self.screen, (54, 58, 59), helm)
+            inset = max(1, size * .06)
+            helm_face = [
+                (rect.left + size * .32, rect.top + size * .15 + inset),
+                (rect.right - size * .32, rect.top + size * .15 + inset),
+                (rect.right - size * .20 - inset, rect.top + size * .27),
+                (rect.right - size * .20 - inset, rect.bottom - size * .27),
+                (rect.right - size * .32, rect.bottom - size * .15 - inset),
+                (rect.left + size * .32, rect.bottom - size * .15 - inset),
+                (rect.left + size * .20 + inset, rect.bottom - size * .27),
+                (rect.left + size * .20 + inset, rect.top + size * .27),
+            ]
+            pygame.draw.polygon(self.screen, (184, 193, 191), helm_face)
+            helm_bounds = pygame.Rect(
                 rect.left + size * .20, rect.top + size * .15,
                 size * .60, size * .70,
             )
-            pygame.draw.rect(
-                self.screen, (54, 58, 59), helm.inflate(2, 2),
-                border_radius=max(2, size // 4),
-            )
-            pygame.draw.rect(
-                self.screen, (184, 193, 191), helm,
-                border_radius=max(2, size // 4),
-            )
             pygame.draw.arc(
-                self.screen, (235, 239, 226), helm.inflate(-2, -2),
+                self.screen, (235, 239, 226), helm_bounds.inflate(-2, -2),
                 math.pi, math.tau, max(1, size // 10),
             )
             slit_y = rect.top + size * .49
