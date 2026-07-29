@@ -47,6 +47,7 @@ MELEE_UNIT_KINDS = ("swordsman", "shield")
 SWORDSMAN_BASE_SPEED = 1
 SWORDSMAN_ATTACK_RANGE = 1.02
 UNIT_VISION_RADIUS = 8.0
+PLAYER_RECRUIT_ENGAGE_RADIUS = UNIT_VISION_RADIUS
 # Shared movement geometry, steering, and path-cache timing. Units are treated
 # as soft discs: UNIT_SOFT_OVERLAP is intentional visual/physical compression,
 # so separation begins only inside the remaining minimum center distance.
@@ -2606,11 +2607,36 @@ class Game:
             spawn_king.y + RECRUIT_FIRST_LATERAL_OFFSET
             + (count % RECRUIT_SLOTS_PER_COLUMN) * RECRUIT_LATERAL_SPACING
         )
-        self.add_unit(
+        recruit = self.add_unit(
             kind,
             team,
             *clamp_to_map((spawn_king.x + direction * RECRUIT_FORWARD_OFFSET, y)),
         )
+        if team == "green":
+            # A fresh recruit immediately joins a nearby visible fight instead
+            # of waiting at the keep for its first explicit player order.
+            self.update_visibility()
+            nearby_enemies = [
+                unit for unit in self.units
+                if (
+                    unit.team != team
+                    and unit.health > 0
+                    and self.currently_visible_enemy(unit)
+                    and dist((recruit.x, recruit.y), (unit.x, unit.y))
+                    <= PLAYER_RECRUIT_ENGAGE_RADIUS
+                )
+            ]
+            target = min(
+                nearby_enemies,
+                key=lambda unit: (
+                    dist((recruit.x, recruit.y), (unit.x, unit.y)),
+                    unit.uid,
+                ),
+                default=None,
+            )
+            if target is not None:
+                recruit.target = target
+                recruit.target_pos = (target.x, target.y)
         return True
 
     def select_kind(self, kind=None):

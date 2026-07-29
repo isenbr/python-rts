@@ -11,6 +11,7 @@ from main import (
     Game,
     MAP_SIZE,
     MAP_CENTER,
+    PLAYER_RECRUIT_ENGAGE_RADIUS,
     UNIT_COSTS,
     UNIT_KINDS,
     UNIT_RENDER_SCALES,
@@ -97,6 +98,49 @@ class ExistingMechanicsTests(GameTestCase):
                 self.assertLessEqual(recruit.x, WORLD_MAX)
                 self.assertLessEqual(WORLD_MIN, recruit.y)
                 self.assertLessEqual(recruit.y, WORLD_MAX)
+
+    def test_new_player_recruit_moves_to_attack_nearby_enemy(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        king = self.game.team_king("green")
+        spawn = (
+            king.x + 4.0,
+            king.y + 1.5,
+        )
+        enemy = self.game.add_unit(
+            "swordsman", "red",
+            spawn[0] + PLAYER_RECRUIT_ENGAGE_RADIUS - 1,
+            spawn[1],
+        )
+        self.game.essence = UNIT_COSTS["swordsman"]
+
+        self.assertTrue(self.game.recruit("swordsman"))
+        recruit = self.game.units[-1]
+
+        self.assertIs(recruit.target, enemy)
+        self.assertEqual(recruit.target_pos, (enemy.x, enemy.y))
+        start_x = recruit.x
+        self.game.update_unit(recruit, .25)
+        self.assertGreater(recruit.x, start_x)
+
+    def test_new_player_recruit_does_not_seek_distant_enemy(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        king = self.game.team_king("green")
+        self.game.add_unit(
+            "swordsman", "red",
+            king.x + 4.0 + PLAYER_RECRUIT_ENGAGE_RADIUS + 1,
+            king.y + 1.5,
+        )
+        self.game.essence = UNIT_COSTS["swordsman"]
+
+        self.assertTrue(self.game.recruit("swordsman"))
+        recruit = self.game.units[-1]
+
+        self.assertIsNone(recruit.target)
+        self.assertIsNone(recruit.target_pos)
 
     def test_move_orders_and_movement_clamp_to_map_bounds(self):
         selected = [
