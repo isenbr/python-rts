@@ -1,0 +1,47 @@
+Integrate shield units into EnemyAI without weakening the existing deterministic AI behavior.
+
+Treat shields as durable, slow frontline melee units. Update every fixed unit-kind count, production
+score, formation role, defense assignment, threat evaluation, matchup rule, recent-loss record, and
+simulation metric that currently assumes only swordsmen and archers.
+
+Enemy production should be able to choose shields when it has at least 300 essence, particularly when a
+durable frontline or base defense is valuable. It must still:
+
+- Recruit swordsmen for inexpensive or urgent melee response
+- Recruit archers when ranged damage is strategically justified and protected
+- Avoid shield-only or archer-only armies
+- Save essence only when justified and never deadlock production
+- Keep archers in rear formation roles and shields in frontline roles
+- Let shields screen allied archers using the existing melee-screening behavior
+- Use only information permitted by the current AI knowledge model
+- Remain deterministic under a fixed random seed
+
+Expose new shield-related scoring weights as named configuration values. Extend simulation reporting to
+include shields rather than silently omitting them. Do not change player controls, unit statistics,
+visuals, map size, or archer firing behavior in this step.
+
+Add deterministic tests covering:
+
+- Shield production with exactly 300 essence
+- Production choices for neutral, defense, frontline-shortage, and mixed-army scenarios
+- Avoiding a shield-only army
+- Shield frontline and reserve/defender assignments
+- Shield target selection and screening behavior
+- Squad formation with shields in front and archers behind
+- Loss bookkeeping and production history including shields
+- No `KeyError` or omitted counts in every AI state and simulation report
+- Stable fixed-seed decisions
+
+After implementation:
+
+1. Run the focused EnemyAI tests.
+2. Run the complete automated test suite.
+3. Run a syntax/compilation check.
+4. Run fixed-seed headless simulations long enough to observe recruitment, rallying, attack, recovery,
+   and defense with all three unit types.
+5. Report units produced by kind, wave composition, state transitions, unspent essence, test results,
+   and any balance concerns.
+6. If screenshots are taken, save them only under `/work/screenshots`, inspect each immediately with
+   `view_image`, and report visual problems.
+
+Do not resize the map or change archer firing behavior yet. Do not commit changes.

@@ -1,0 +1,43 @@
+Work in /work on the python-rts project. Continue from the last-seen player-army work. Do not commit
+  changes.
+
+  Refactor EnemyAI production so that, when the AI has never observed a player army, ordinary production
+  aims to spend roughly equal total essence on swordsmen, archers, and shields.
+
+  Unit costs are currently:
+  - swordsman: 200
+  - archer: 500
+  - shield: 300
+
+  Requirements:
+  - Balance by essence invested, never by number of units.
+  - Track or calculate the AI’s relevant essence investment per unit kind.
+  - Prefer the affordable unit whose purchase best reduces the deficit from a one-third essence target.
+  - Account for the projected purchase cost when comparing choices so expensive units are not permanently
+  starved.
+  - Keep selection deterministic, including deterministic tie-breaking.
+  - Preserve resource constraints:
+    - Never recruit an unaffordable or unavailable unit.
+    - It is acceptable to wait and save for the unit needed to correct the essence balance.
+    - Emergency base defense may still buy an affordable emergency counter when waiting would be unsafe.
+  - Remove or neutralize old score bonuses that make the no-information baseline contradict equal essence
+  spending.
+  - Production history should expose enough information to test the target shares, current spent essence,
+  and selected deficit.
+
+  Add tests covering:
+  1. A long no-information production sequence spends approximately one third of its essence on each
+  kind.
+  2. The assertion is based on essence totals, demonstrating that unit counts are intentionally unequal.
+  3. The imbalance remains bounded by a reasonable amount related to the largest unit cost.
+  4. Low resources cause saving when the most underfunded unit is not affordable.
+  5. Emergency defense retains a valid affordable fallback.
+  6. Unavailable unit kinds do not deadlock production.
+  7. Results are deterministic with a fixed seed.
+
+  Checks:
+  - Run the focused EnemyProductionTests.
+  - Run any deterministic AI simulation already provided by the repository.
+  - Run: python3 -m unittest discover -s tests
+  - Fix all failures before stopping.
+  - Briefly report the achieved long-run essence shares and exact test results.

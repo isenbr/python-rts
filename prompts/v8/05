@@ -1,0 +1,38 @@
+Modify casualty-triggered retreat behavior so an enemy AI group keeps attacking when a fresh combat-
+strength assessment says it remains meaningfully stronger than the opponent group.
+
+Apply this override specifically to casualty-based retreat or regroup triggers. Reevaluate relative
+strength after casualties instead of relying on the assessment from before the losses. Continue
+attacking only when the measured advantage exceeds a named, configurable safety margin.
+
+Do not suppress hard-safety retreat conditions, including having no viable combat units, having no
+valid or reachable objective, or any equivalent critical rule already present in the project. Resume
+normal retreat behavior immediately if a later assessment becomes WEAKER, UNCERTAIN, or stale. Ensure
+a defeated, targetless, or path-blocked group cannot remain stuck in an attacking state.
+
+Use and document this decision precedence:
+
+1. Hard-safety conditions may force retreat or terminate the attack.
+2. A fresh and sufficiently strong advantage may override a casualty-based retreat trigger.
+3. A weaker assessment causes retreat.
+4. An uncertain or stale assessment uses the documented conservative fallback.
+
+Add deterministic tests covering:
+
+- High casualties while the group remains clearly stronger
+- High casualties that make the group weaker
+- A later reassessment reversing the continue-attacking decision
+- Stale or uncertain opponent intelligence
+- No viable combat units
+- No valid or reachable target
+- A hard-safety retreat condition taking precedence
+- The casualty override not affecting unrelated retreat reasons
+
+After implementation:
+
+1. Run the focused casualty and retreat tests and the complete automated test suite.
+2. Run the project's syntax/compilation checks.
+3. Run fixed-seed headless scenarios for both continued attacks and eventual retreats.
+4. Report the final rule precedence and the configured advantage margin.
+
+Do not commit changes.

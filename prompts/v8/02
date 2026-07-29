@@ -1,0 +1,33 @@
+Update enemy unit-production logic so that when the enemy AI observes a large archer threat, it
+prioritizes shield units over swordsmen.
+
+Base this decision only on information legitimately available to the enemy AI through current
+visibility and its existing memory system. Do not read hidden global player state. Define named,
+configurable thresholds for what counts as a low, moderate, and high archer threat. Increase shield
+priority proportionally or in clear tiers as that threat rises, and reduce swordsman priority
+correspondingly.
+
+Preserve resource, population, production-cooldown, and unit-availability constraints. Avoid rapid
+oscillation when observed archer counts fluctuate near a threshold by using the project's existing
+decision cadence, smoothing, or explicit hysteresis as appropriate. Ensure stale observations are
+handled consistently with the AI's existing information model.
+
+Add deterministic tests covering:
+
+- No or low observed archer threat
+- Moderate observed archer threat
+- High observed archer threat
+- Archer counts fluctuating around a threshold
+- Lost vision or stale composition information
+- Insufficient resources for the preferred counter unit
+- Shield priority displacing swordsman production without breaking other unit choices
+
+After implementation:
+
+1. Run the focused production tests and the complete automated test suite.
+2. Run the project's syntax/compilation checks.
+3. Report the chosen thresholds, hysteresis behavior, and expected composition changes.
+4. If any screenshot is taken, save it only under `/work/screenshots`, inspect it immediately with
+   `view_image`, and report every visual problem.
+
+Do not implement group-strength retreat decisions yet. Do not commit changes.

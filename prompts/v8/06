@@ -1,0 +1,33 @@
+Rebalance enemy production so the enemy AI uses fewer swordsmen overall while retaining them when they
+are tactically useful.
+
+Lower the baseline swordsman weight, target ratio, or production cap through named configuration
+values consistent with the project's existing production system. Ensure the archer-counter logic
+further displaces swordsmen in favor of shields when a substantial archer threat is observed. Do not
+remove swordsmen entirely or make them impossible to recruit in ordinary mixed-army situations.
+
+Review every fallback path in the production logic. Resource shortages, unavailable preferred units,
+population constraints, and randomized selection must not accidentally make swordsmen the dominant
+choice again. Preserve current unit statistics, costs, income, production timing, and player
+recruitment behavior.
+
+Add deterministic composition tests covering:
+
+- Ordinary enemy compositions with no special counter pressure
+- Archer-heavy observed enemy forces
+- Low-resource and resource-constrained production
+- The preferred unit being temporarily unavailable
+- Long fixed-seed production sequences
+- Swordsmen remaining possible but less common
+- Shield prioritization and other unit choices continuing to function
+
+After implementation:
+
+1. Run the focused production and composition tests.
+2. Run the complete automated test suite and syntax/compilation checks.
+3. Run fixed-seed headless simulations long enough to compare resulting unit ratios.
+4. Report the old and new effective production weights or target ratios and the observed deterministic
+   composition changes.
+5. Update relevant AI tuning documentation or configuration comments.
+
+Do not alter combat statistics or unrelated gameplay balance. Do not commit changes.

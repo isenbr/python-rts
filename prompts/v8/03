@@ -1,0 +1,38 @@
+Implement a reusable combat-strength assessment that compares each enemy AI combat group with the
+opponent group it is currently facing.
+
+Evaluate effective combat strength rather than raw unit count. Use relevant existing mechanics such as
+unit type matchups, current health, damage output, attack range, defenses, and nearby reinforcements
+when those factors are available and meaningful. Keep weights and thresholds named, centralized, and
+deterministic. Avoid inventing a second set of combat statistics when existing unit data can be reused.
+
+Use only currently observed information and the AI's established memory model. Do not read hidden
+player units or otherwise bypass fog of war. Store the latest assessment with enough context, including
+its observation time or revision, to detect stale judgments. Return a clear result containing an
+advantage ratio or equivalent score and a classification such as STRONGER, UNCERTAIN, or WEAKER.
+
+Recalculate when relevant information changes and periodically while groups remain engaged. Relevant
+changes include observed casualties, damage, newly seen opponents, lost vision, reinforcements, and
+changes to either group's composition. Keep the evaluator independently testable and do not wire it
+into retreat behavior in this step.
+
+Add deterministic tests covering:
+
+- A clearly superior enemy AI group
+- A clearly inferior enemy AI group
+- Evenly matched groups
+- A damaged group compared with a healthy group
+- Important unit-type matchups
+- Newly observed reinforcements on either side
+- Lost vision and stale intelligence
+- Repeated evaluation with unchanged information
+
+After implementation:
+
+1. Run the focused evaluator tests and the complete automated test suite.
+2. Run the project's syntax/compilation checks.
+3. Report the formula, thresholds, update triggers, and stale-information rules.
+4. Confirm through tests that the evaluator does not use hidden information.
+
+Do not change attack, retreat, regroup, or production decisions beyond the production behavior already
+implemented. Do not commit changes.

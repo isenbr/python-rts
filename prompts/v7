@@ -1,0 +1,30 @@
+• Change the game so the archer unit moves at exactly half the speed of the swordsman unit.
+
+  Work directly in the current repository and verify each step before proceeding:
+
+  1. Read AGENTS.md and inspect the repository’s current state.
+  2. Find the authoritative movement-speed logic for both units. Confirm it affects actual gameplay,
+     including any modifiers or alternate spawn paths.
+
+  3. Determine the swordsman’s effective base movement speed without changing it.
+  4. Update the archer’s movement speed to exactly swordsman speed / 2. Prefer deriving it from the
+     swordsman’s value when that fits the existing architecture.
+
+  5. Add or update an automated test that verifies the 2:1 speed ratio.
+  6. Run relevant tests, type checks, linting, and builds after each meaningful change. If a check fails,
+     diagnose and fix it before continuing.
+
+  7. If the game is runnable, launch it and validate the behavior in gameplay. Save screenshots only
+     under /work/screenshots; after every screenshot, inspect it with view_image and report any visual
+     problems.
+
+  8. Review the final diff and confirm that movement animation, attack speed, other units, and unrelated
+     behavior were not changed.
+
+  Do not commit changes. Finish by reporting:
+
+  - Files changed
+  - Previous and new effective speeds
+  - Checks run and their results
+  - Any remaining risks or limitations
+  

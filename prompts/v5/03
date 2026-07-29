@@ -1,0 +1,42 @@
+Add complete player-facing recruitment, selection, HUD, controls, and visuals for the new shield unit.
+
+Requirements:
+
+- Add a "Raise Shield" HUD card showing "300 essence".
+- Give it a non-conflicting recruitment shortcut and show that shortcut on the card.
+- Add a non-conflicting select-all-shields shortcut and update the on-screen controls and README.
+- Include shield counts in the army summary.
+- Disable the card visually when the player has less than 300 essence.
+- Make the shield unit approximately 15% larger than swordsmen and archers while keeping its world
+  position, selection ring, health cracks, and click/drag selection visually coherent.
+- Draw a distinct, readable shield emblem using the game's existing code-only Pygame visual style.
+- Keep the HUD usable at the default 1280 x 720 window without text or buttons overlapping the base
+  vitality panel.
+
+Do not change shield statistics, enemy production, map size, or archer movement/attack behavior in this
+step.
+
+Add automated tests for:
+
+- The shield recruit button's kind, label, cost, enabled state, and click behavior
+- The shield recruitment keyboard shortcut
+- Selecting all shields without selecting other unit kinds
+- The all-army shortcut still selecting every friendly unit
+- Army counts including shields
+- Shield render size being approximately 15% larger
+- HUD controls fitting within the default window and not overlapping one another
+
+After implementation:
+
+1. Run the focused UI/control tests and the full automated test suite.
+2. Run a syntax/compilation check.
+3. Launch the game and exercise mouse recruitment, keyboard recruitment, shield-only selection,
+   mixed-unit selection, move orders, and combat.
+4. Take screenshots at the menu, HUD with the shield card, a selected shield beside a swordsman, and a
+   mixed-unit fight. Save screenshots only under `/work/screenshots`.
+5. Immediately after each screenshot, inspect it with `view_image` and report all visual problems,
+   especially HUD overlap, clipped labels, unclear unit silhouettes, incorrect scale, and selection-ring
+   alignment. Fix verified problems and repeat the relevant check.
+6. Report exact test results and the final control mapping.
+
+Do not commit changes.

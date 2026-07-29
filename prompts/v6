@@ -1,0 +1,31 @@
+Implement a post-shot movement lock for every archer, green and red.
+  >
+  > Add a separate movement_lock_timer to Unit. Whenever an archer successfully fires, set this timer to
+  > 1.0 second. Decrease it by dt during each unit update and prevent all strategic, attack-move,
+  > formation, retreat, kiting, and tactical displacement while it remains positive.
+  >
+  > The lock must restrict movement only. It must not prevent targeting or firing, and it must not
+  > replace or alter attack_timer. Archers must retain their existing 1.0-second cooldown, damage, range,
+  > and movement speed. An archer continuously engaging an in-range target should therefore still fire
+  > once per second while remaining stationary.
+  >
+  > Preserve the existing moved_this_update check so an archer cannot fire during an update in which it
+  > already moved. Once the lock expires, the archer should resume any existing move order or tactical
+  > behavior normally. Swordsmen and shields must remain unchanged.
+  >
+  > Add focused tests proving:
+  >
+  > - An archer cannot move during the 1.0 seconds after firing.
+  > - It can move again immediately when the lock expires.
+  > - Continuous stationary firing still uses the existing 1.0-second cooldown.
+  > - A move or attack-move order survives the lock and resumes afterward.
+  > - Red archer retreat and tactical repositioning obey the lock.
+  > - The lock applies only after a successful shot.
+  > - Swordsman and shield movement remain unchanged.
+  >
+  > Test timer-boundary behavior using realistic nonzero update steps, accounting for floating-point
+  > precision without adding artificial delay to gameplay.
+  >
+  > Run the focused tests and the complete test suite. Do not alter unrelated gameplay or visual code,
+  > take screenshots, or commit changes.
+  

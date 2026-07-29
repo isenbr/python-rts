@@ -13,7 +13,10 @@ pygame.init()
 pygame.display.set_caption("Verdant Crown")
 
 WIDTH, HEIGHT = 1280, 720
-MAP_SIZE, HUD_H = 200, 126
+MAP_SIZE, HUD_H = 120, 126
+MAP_CENTER = MAP_SIZE / 2
+WORLD_MIN = .5
+WORLD_MAX = MAP_SIZE - .5
 FPS = 60
 GREEN = (67, 139, 79)
 RED = (164, 61, 55)
@@ -29,7 +32,70 @@ FOG_TEXTURE_SCALE = .16
 TERRAIN_SEED = 4729
 GROUND_COLOR = (76, 109, 60)
 TERRAIN_DETAIL_MIN_ZOOM = 7
-UNIT_COSTS = {"swordsman": 200, "archer": 500}
+UNIT_KINDS = ("swordsman", "archer", "shield")
+ENEMY_PRODUCTION_KINDS = UNIT_KINDS
+MELEE_UNIT_KINDS = ("swordsman", "shield")
+SWORDSMAN_BASE_SPEED = 1
+UNIT_STATS = {
+    "swordsman": {
+        "max_health": 100,
+        "speed": SWORDSMAN_BASE_SPEED,
+        "damage": 5,
+        "cooldown": .5,
+        "attack_range": 1.02,
+    },
+    "archer": {
+        "max_health": 20,
+        "speed": .7,
+        "damage": 50,
+        "cooldown": 4 / 3,
+        "attack_range": 5,
+    },
+    "shield": {
+        "max_health": 200,
+        "speed": .8,
+        "damage": 5,
+        "cooldown": 1,
+        "attack_range": 1.02,
+    },
+}
+ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER = .3
+UNIT_COSTS = {"swordsman": 200, "archer": 500, "shield": 300}
+UNIT_RENDER_SCALES = {
+    "swordsman": 1.55,
+    "archer": 1.55,
+    "shield": 1.55 * 1.15,
+}
+MIN_UNIT_RENDER_SIZE = 8
+RECRUIT_SHORTCUTS = {
+    pygame.K_s: "swordsman",
+    pygame.K_a: "archer",
+    pygame.K_q: "shield",
+}
+SELECTION_SHORTCUTS = {
+    pygame.K_1: "swordsman",
+    pygame.K_2: "archer",
+    pygame.K_4: "shield",
+    pygame.K_3: None,
+}
+
+PLAYER_BASE_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
+ENEMY_BASE_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
+CAMERA_START = (PLAYER_BASE_POSITION[0] + 2.5, MAP_CENTER + .5)
+PLAYER_STARTING_UNITS = (
+    ("swordsman", 5, -1),
+    ("swordsman", 5, 2),
+    ("archer", 6.5, .5),
+)
+ENEMY_STARTING_UNITS = (
+    ("swordsman", -5, -2),
+    ("swordsman", -5, 0),
+    ("swordsman", -5, 2),
+    ("archer", -6.5, 0),
+)
+ROAD_START_X = round(MAP_SIZE * .025)
+ROAD_END_X = MAP_SIZE - ROAD_START_X
+ROAD_WAVE_LENGTH = MAP_SIZE * .085
 
 
 def clamp(value, low, high):
@@ -38,6 +104,17 @@ def clamp(value, low, high):
 
 def dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def clamp_to_map(position):
+    return (
+        clamp(position[0], WORLD_MIN, WORLD_MAX),
+        clamp(position[1], WORLD_MIN, WORLD_MAX),
+    )
+
+
+def offset_from(position, offset):
+    return position[0] + offset[0], position[1] + offset[1]
 
 
 @dataclass
@@ -55,19 +132,24 @@ class Unit:
     target_pos: Optional[tuple[float, float]] = None
     target: object = None
     attack_timer: float = 0
+    movement_lock_timer: float = 0
     flash: float = 0
     selected: bool = False
     uid: int = 0
     tactical_pos: Optional[tuple[float, float]] = None
     tactical_timer: float = 0
+    moved_this_update: bool = False
 
     def __post_init__(self):
-        if self.kind == "swordsman":
-            self.max_health, self.speed, self.damage = 100, 1, 5
-            self.cooldown, self.attack_range = .5, 1.02
-        else:
-            self.max_health, self.speed, self.damage = 20, 2, 30
-            self.cooldown, self.attack_range = 1, 5
+        try:
+            stats = UNIT_STATS[self.kind]
+        except (KeyError, TypeError):
+            raise ValueError(f"Invalid unit kind: {self.kind!r}") from None
+        self.max_health = stats["max_health"]
+        self.speed = stats["speed"]
+        self.damage = stats["damage"]
+        self.cooldown = stats["cooldown"]
+        self.attack_range = stats["attack_range"]
         self.health = self.max_health
 
 
@@ -90,6 +172,199 @@ class AIState(Enum):
     RECOVERING = auto()
 
 
+class CombatAdvantage(Enum):
+    STRONGER = auto()
+    UNCERTAIN = auto()
+    WEAKER = auto()
+
+
+@dataclass(frozen=True)
+class ObservedCombatUnit:
+    """The combat facts available at one legitimate red-team sighting."""
+
+    uid: int
+    kind: str
+    x: float
+    y: float
+    health: float
+    observed_at: float
+    observation_revision: int
+
+
+@dataclass(frozen=True)
+class LastSeenPlayerUnit:
+    """Persistent strategic facts captured at a legitimate red-team sighting."""
+
+    uid: int
+    kind: str
+    x: float
+    y: float
+    health: float
+    observed_at: float
+
+
+@dataclass(frozen=True)
+class CombatAssessment:
+    group_uids: tuple[int, ...]
+    opponent_uids: tuple[int, ...]
+    own_strength: float
+    opponent_strength: float
+    advantage_ratio: float
+    classification: CombatAdvantage
+    evaluated_at: float
+    observation_revision: int
+    oldest_opponent_observation: float
+    stale: bool
+
+
+class CombatStrengthEvaluator:
+    """Deterministic, fog-safe comparison of a red group and observed opponents."""
+
+    # All balance controls live here. Unit combat values themselves come from
+    # UNIT_STATS; these only describe positional value and known matchups.
+    RANGE_REFERENCE = 5.0
+    MAX_RANGE_BONUS = .35
+    REINFORCEMENT_RADIUS = 8.0
+    REINFORCEMENT_WEIGHT = .5
+    STRONGER_RATIO = 1.25
+    WEAKER_RATIO = .8
+    STALE_AFTER = 6.0
+    PERIODIC_REFRESH = 1.0
+    MIN_STRENGTH = 1e-9
+    MATCHUP_MULTIPLIER = {
+        "swordsman": {"swordsman": 1.0, "archer": 1.3, "shield": .9},
+        "archer": {"swordsman": 1.2, "archer": 1.0, "shield": 1.15},
+        "shield": {"swordsman": 1.0, "archer": 1.25, "shield": 1.0},
+    }
+
+    def __init__(self):
+        self.latest: dict[tuple[int, ...], CombatAssessment] = {}
+        self._signatures: dict[tuple[int, ...], tuple] = {}
+
+    @classmethod
+    def _range_multiplier(cls, kind):
+        attack_range = UNIT_STATS[kind]["attack_range"]
+        return 1.0 + min(
+            cls.MAX_RANGE_BONUS,
+            attack_range / cls.RANGE_REFERENCE * cls.MAX_RANGE_BONUS,
+        )
+
+    @classmethod
+    def _unit_strength(cls, kind, health, opposing_kinds):
+        stats = UNIT_STATS[kind]
+        dps = stats["damage"] / stats["cooldown"]
+        matchup = 1.0
+        if opposing_kinds:
+            matchup = sum(
+                cls.MATCHUP_MULTIPLIER[kind][opponent]
+                for opponent in opposing_kinds
+            ) / len(opposing_kinds)
+        return health * dps * cls._range_multiplier(kind) * matchup
+
+    @staticmethod
+    def _near_group(unit, group):
+        return min(
+            dist((unit.x, unit.y), (member.x, member.y)) for member in group
+        )
+
+    def assess(
+        self,
+        group,
+        opponents,
+        now,
+        observation_revision,
+        own_reinforcements=(),
+        opponent_reinforcements=(),
+    ):
+        """Return an assessment; opponents must be observation snapshots."""
+        group = tuple(sorted(group, key=lambda unit: unit.uid))
+        opponents = tuple(sorted(opponents, key=lambda unit: unit.uid))
+        if not group:
+            raise ValueError("A combat group must contain at least one unit")
+        key = tuple(unit.uid for unit in group)
+        nearby_own = tuple(sorted(
+            (
+                unit for unit in own_reinforcements
+                if unit.uid not in key
+                and self._near_group(unit, group) <= self.REINFORCEMENT_RADIUS
+            ),
+            key=lambda unit: unit.uid,
+        ))
+        nearby_opponents = tuple(sorted(
+            (
+                unit for unit in opponent_reinforcements
+                if unit.uid not in {opponent.uid for opponent in opponents}
+                and self._near_group(unit, opponents or group)
+                <= self.REINFORCEMENT_RADIUS
+            ),
+            key=lambda unit: unit.uid,
+        ))
+        all_opponents = opponents + nearby_opponents
+        signature = (
+            tuple((u.uid, u.kind, round(u.health, 6)) for u in group),
+            tuple((u.uid, u.kind, round(u.health, 6), u.observation_revision)
+                  for u in all_opponents),
+            tuple((u.uid, u.kind, round(u.health, 6)) for u in nearby_own),
+            observation_revision,
+        )
+        previous = self.latest.get(key)
+        if (
+            previous is not None
+            and self._signatures.get(key) == signature
+            and now - previous.evaluated_at < self.PERIODIC_REFRESH
+        ):
+            return previous
+
+        own_kinds = [unit.kind for unit in group]
+        opponent_kinds = [unit.kind for unit in all_opponents]
+        own_strength = sum(
+            self._unit_strength(unit.kind, unit.health, opponent_kinds)
+            for unit in group
+        )
+        own_strength += self.REINFORCEMENT_WEIGHT * sum(
+            self._unit_strength(unit.kind, unit.health, opponent_kinds)
+            for unit in nearby_own
+        )
+        opponent_strength = sum(
+            self._unit_strength(unit.kind, unit.health, own_kinds)
+            for unit in opponents
+        )
+        opponent_strength += self.REINFORCEMENT_WEIGHT * sum(
+            self._unit_strength(unit.kind, unit.health, own_kinds)
+            for unit in nearby_opponents
+        )
+        oldest = min(
+            (unit.observed_at for unit in all_opponents),
+            default=float("-inf"),
+        )
+        stale = not all_opponents or now - oldest > self.STALE_AFTER
+        ratio = (
+            own_strength / max(opponent_strength, self.MIN_STRENGTH)
+            if all_opponents else 1.0
+        )
+        if stale or self.WEAKER_RATIO < ratio < self.STRONGER_RATIO:
+            classification = CombatAdvantage.UNCERTAIN
+        elif ratio >= self.STRONGER_RATIO:
+            classification = CombatAdvantage.STRONGER
+        else:
+            classification = CombatAdvantage.WEAKER
+        result = CombatAssessment(
+            key,
+            tuple(unit.uid for unit in all_opponents),
+            own_strength,
+            opponent_strength,
+            ratio,
+            classification,
+            now,
+            observation_revision,
+            oldest,
+            stale,
+        )
+        self.latest[key] = result
+        self._signatures[key] = signature
+        return result
+
+
 class EnemyAI:
     """Owns red-team strategy without changing per-unit combat or movement."""
 
@@ -109,6 +384,16 @@ class EnemyAI:
     FORMATION_READY_FRACTION = .6
     FRONT_SPACING = 1.45
     LINE_SPACING = 2.25
+    FORMATION_ROLE_BY_KIND = {
+        "shield": "shield_rank",
+        "swordsman": "swordsman_rank",
+        "archer": "archer_rank",
+    }
+    FORMATION_FORWARD_OFFSETS = {
+        "shield_rank": 0.0,
+        "swordsman_rank": LINE_SPACING,
+        "archer_rank": LINE_SPACING * 2,
+    }
     WAVE_COHESION_TOLERANCE = 5.0
     RECOVERY_LOSS_FRACTION = .5
     RECOVERY_DURATION = 7.0
@@ -130,28 +415,82 @@ class EnemyAI:
     FRONTLINE_RATIO = .5
     SCORE_HYSTERESIS = 8.0
     LOSS_MEMORY_DURATION = 24.0
+    COMBAT_ENGAGEMENT_RADIUS = 10.0
+    # Field-combat decision controls. A fresh ratio at or below the retreat
+    # margin retreats; a recovering group needs the wider re-engage margin to
+    # attack again. This gap is the hysteresis band. Stale sightings are treated
+    # conservatively: an attacker retreats, while a recovering group stays at
+    # the rally point. No sighting means no strength decision.
+    COMBAT_RETREAT_RATIO = .8
+    COMBAT_REENGAGE_RATIO = 1.25
+    COMBAT_DECISION_INTERVAL = 1.0
+    COMBAT_URGENT_RETREAT_RATIO = .5
+    COMBAT_URGENT_REENGAGE_RATIO = 1.75
+    OBJECTIVE_FINISH_SECONDS = 4.0
+    # Casualties normally end a wave.  They may be ignored only when a new,
+    # non-stale assessment measures an advantage strictly above this margin.
+    # This deliberately sits above the ordinary "stronger" threshold.
+    CASUALTY_ADVANTAGE_MARGIN = 1.5
 
     # Production score weights. Keeping these named makes balance changes explicit.
-    BASE_SWORD_SCORE = 42.0
+    ARCHER_THREAT_LOW_THRESHOLD = 0
+    ARCHER_THREAT_MODERATE_THRESHOLD = 3
+    ARCHER_THREAT_HIGH_THRESHOLD = 6
+    ARCHER_THREAT_HYSTERESIS = 1
+    ARCHER_THREAT_SHIELD_BONUS = {
+        "low": 0.0,
+        "moderate": 46.0,
+        "high": 92.0,
+    }
+    ARCHER_THREAT_SWORD_PENALTY = {
+        "low": 0.0,
+        "moderate": 24.0,
+        "high": 54.0,
+    }
+    # Swords remain the cheap emergency melee option, but ordinary production
+    # aims to keep them near one third of the army instead of defaulting to them.
+    BASE_SWORD_SCORE = 30.0
     BASE_ARCHER_SCORE = 38.0
+    BASE_SHIELD_SCORE = 34.0
+    SWORD_TARGET_RATIO = .34
+    SWORD_OVER_TARGET_PENALTY = 36.0
     EXPOSED_ARCHER_SWORD_BONUS = 18.0
     PLAYER_SWORD_ARCHER_BONUS = 15.0
-    FRONTLINE_SHORTAGE_BONUS = 42.0
+    PLAYER_MELEE_SHIELD_BONUS = 12.0
+    FRONTLINE_SHORTAGE_SWORD_BONUS = 24.0
+    FRONTLINE_SHORTAGE_SHIELD_BONUS = 40.0
+    DURABLE_FRONTLINE_BONUS = 18.0
+    SQUAD_SHIELD_SHORTAGE_BONUS = 26.0
+    BASE_DEFENSE_SHIELD_BONUS = 28.0
     PROTECTED_ARCHER_BONUS = 14.0
     MISSING_BACKLINE_BONUS = 20.0
     UNPROTECTED_ARCHER_PENALTY = 34.0
     EMERGENCY_SWORD_BONUS = 65.0
+    URGENT_SHIELD_PENALTY = 24.0
     RECENT_SWORD_LOSS_BONUS = 5.0
     RECENT_ARCHER_LOSS_BONUS = 7.0
+    RECENT_SHIELD_LOSS_BONUS = 6.0
     FAILED_WAVE_FRONTLINE_BONUS = 6.0
-    SAVE_FOR_ARCHER_MARGIN = 6.0
+    FAILED_WAVE_SHIELD_BONUS = 9.0
+    SHIELD_ONLY_PENALTY = 80.0
+    SHIELD_ONLY_SWORD_BONUS = 45.0
+    SAVE_FOR_PREFERRED_MARGIN = 6.0
     SERIOUS_THREAT_SCORE = 4.0
+    # Counter production is apportioned by essence. Projecting the next
+    # purchase and minimizing total share error prevents ties near a target
+    # boundary from oscillating; ENEMY_PRODUCTION_KINDS breaks exact ties.
+    PRODUCTION_SHARE_ROUNDING_TOLERANCE = .03
+    PRODUCTION_COUNTERS = {
+        "swordsman": "archer",
+        "archer": "shield",
+        "shield": "swordsman",
+    }
     STATE_PRODUCTION_WEIGHTS = {
-        AIState.BUILDING: {"swordsman": 8.0, "archer": 4.0},
-        AIState.RALLYING: {"swordsman": 5.0, "archer": 8.0},
-        AIState.ATTACKING: {"swordsman": 8.0, "archer": 3.0},
-        AIState.DEFENDING: {"swordsman": 16.0, "archer": -4.0},
-        AIState.RECOVERING: {"swordsman": 12.0, "archer": 2.0},
+        AIState.BUILDING: {"swordsman": 8.0, "archer": 4.0, "shield": 2.0},
+        AIState.RALLYING: {"swordsman": 5.0, "archer": 8.0, "shield": 6.0},
+        AIState.ATTACKING: {"swordsman": 8.0, "archer": 3.0, "shield": 5.0},
+        AIState.DEFENDING: {"swordsman": 16.0, "archer": -4.0, "shield": 24.0},
+        AIState.RECOVERING: {"swordsman": 12.0, "archer": 2.0, "shield": 10.0},
     }
 
     VALID_TRANSITIONS = {
@@ -161,7 +500,9 @@ class EnemyAI:
         AIState.DEFENDING: {
             AIState.BUILDING, AIState.RALLYING, AIState.ATTACKING, AIState.RECOVERING
         },
-        AIState.RECOVERING: {AIState.BUILDING, AIState.RALLYING, AIState.DEFENDING},
+        AIState.RECOVERING: {
+            AIState.BUILDING, AIState.RALLYING, AIState.ATTACKING, AIState.DEFENDING
+        },
     }
 
     def __init__(self, game, rng=None, decision_interval=.25):
@@ -173,12 +514,16 @@ class EnemyAI:
         self.state = AIState.BUILDING
         self.decision_count = 0
         self.squad: set[int] = set()
+        self.recovery_guards: set[int] = set()
         self.formation_roles: dict[int, str] = {}
         self.rally_elapsed = 0.0
         self.recovery_elapsed = 0.0
         self.wave_start_strength = 0
         self.wave_number = 0
         self.wave_history: list[dict] = []
+        self.launch_gate_history: list[dict] = []
+        self.last_launch_gate: Optional[dict] = None
+        self._launch_gate_signature: Optional[tuple] = None
         self.reserve: set[int] = set()
         self.defenders: set[int] = set()
         self.pre_defense_state = AIState.BUILDING
@@ -188,14 +533,27 @@ class EnemyAI:
         self.state_history = [(0.0, self.state)]
         self.elapsed = 0.0
         self.player_knowledge: dict[int, tuple[str, float]] = {}
+        self.combat_observations: dict[int, ObservedCombatUnit] = {}
+        self.last_seen_player_army: dict[int, LastSeenPlayerUnit] = {}
+        self.combat_observation_revision = 0
+        self._currently_observed_player_uids: set[int] = set()
+        self.combat_evaluator = CombatStrengthEvaluator()
+        self.latest_combat_assessments = self.combat_evaluator.latest
+        self.combat_opponent_uids: set[int] = set()
+        self.last_combat_decision_at = float("-inf")
+        self.last_combat_decision: Optional[str] = None
+        self.archer_threat_level = "low"
         self.recent_losses: list[tuple[float, str]] = []
         self._known_red_uids: dict[int, str] = {
             unit.uid: unit.kind for unit in self._living_red_units()
         }
         self.failed_waves = 0
         self.last_production_choice: Optional[str] = None
+        self.unavailable_production_kinds: set[str] = set()
         self.production_history: list[dict] = []
-        self.last_production_scores = {"swordsman": 0.0, "archer": 0.0}
+        self.last_production_scores = {
+            kind: 0.0 for kind in ENEMY_PRODUCTION_KINDS
+        }
 
     def transition_to(self, state):
         if state == self.state:
@@ -230,16 +588,31 @@ class EnemyAI:
     def _cleanup_squad(self):
         living = {unit.uid for unit in self._living_red_units()}
         self.squad.intersection_update(living)
+        self.recovery_guards.intersection_update(living)
         self.reserve.intersection_update(living)
         self.defenders.intersection_update(living)
         self.formation_roles = {
-            uid: role for uid, role in self.formation_roles.items() if uid in living
+            uid: role for uid, role in self.formation_roles.items()
+            if uid in living and uid in self.squad
         }
+        for unit in self._squad_units():
+            self.formation_roles[unit.uid] = self.FORMATION_ROLE_BY_KIND[unit.kind]
 
-    def _formation_destination(self, unit, ordered_units=None):
+    def _formation_role(self, unit):
+        """Return and repair the explicit rank role belonging to a squad unit."""
+        role = self.FORMATION_ROLE_BY_KIND[unit.kind]
+        if unit.uid in self.squad:
+            self.formation_roles[unit.uid] = role
+        return role
+
+    def _formation_destination(self, unit, ordered_units=None, anchor=None):
         ordered_units = ordered_units or self._squad_units()
-        role = self.formation_roles[unit.uid]
-        role_units = [member for member in ordered_units if self.formation_roles[member.uid] == role]
+        ordered_units = sorted(ordered_units, key=lambda member: member.uid)
+        role = self._formation_role(unit)
+        role_units = [
+            member for member in ordered_units
+            if self._formation_role(member) == role
+        ]
         index = role_units.index(unit)
         lateral = (index - (len(role_units) - 1) / 2) * self.FRONT_SPACING
         advance_x, advance_y = self._unit_vector(
@@ -247,12 +620,12 @@ class EnemyAI:
             (self.game.player_base.x, self.game.player_base.y),
         )
         side_x, side_y = -advance_y, advance_x
-        rear_offset = self.LINE_SPACING if role == "rear" else 0.0
-        rally_x, rally_y = self.rally_point
-        return (
-            rally_x - advance_x * rear_offset + side_x * lateral,
-            rally_y - advance_y * rear_offset + side_y * lateral,
-        )
+        forward_offset = self.FORMATION_FORWARD_OFFSETS[role]
+        anchor_x, anchor_y = anchor or self.rally_point
+        return clamp_to_map((
+            anchor_x - advance_x * forward_offset + side_x * lateral,
+            anchor_y - advance_y * forward_offset + side_y * lateral,
+        ))
 
     def _assign_available_units(self):
         available = [
@@ -266,19 +639,32 @@ class EnemyAI:
         )
         reserve_needed = max(0, desired_reserve - len(self.reserve))
         base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
-        for unit in sorted(
-            available,
-            key=lambda member: (dist((member.x, member.y), base_pos), member.uid),
-        )[:reserve_needed]:
+        reserve_candidates = list(available)
+        reserve_has_shield = any(
+            unit.kind == "shield" and unit.uid in self.reserve
+            for unit in self._living_red_units()
+        )
+        for _ in range(reserve_needed):
+            if not reserve_candidates:
+                break
+            unit = min(
+                reserve_candidates,
+                key=lambda member: (
+                    member.kind == "shield" if reserve_has_shield
+                    else member.kind != "shield",
+                    dist((member.x, member.y), base_pos),
+                    member.uid,
+                ),
+            )
+            reserve_candidates.remove(unit)
             self.reserve.add(unit.uid)
+            reserve_has_shield |= unit.kind == "shield"
             unit.target = None
             unit.target_pos = self._reserve_position(unit)
         available = [unit for unit in available if unit.uid not in self.reserve]
         for unit in sorted(available, key=lambda member: member.uid):
             self.squad.add(unit.uid)
-            self.formation_roles[unit.uid] = (
-                "frontline" if unit.kind == "swordsman" else "rear"
-            )
+            self.formation_roles[unit.uid] = self.FORMATION_ROLE_BY_KIND[unit.kind]
             unit.target = None
         squad_units = self._squad_units()
         for unit in squad_units:
@@ -313,7 +699,11 @@ class EnemyAI:
                 and (attacking_base or destination_near_base)
             )
             if distance <= radius or approaching:
-                danger = 2.0 if unit.kind == "swordsman" else 1.5
+                danger = {
+                    "swordsman": 2.0,
+                    "archer": 1.5,
+                    "shield": 2.4,
+                }[unit.kind]
                 danger *= max(.25, unit.health / unit.max_health)
                 if attacking_base:
                     danger += 2.5
@@ -327,24 +717,274 @@ class EnemyAI:
                 threats.append((unit, danger))
         return threats
 
+    def _player_unit_is_visible(self, unit, observers=None):
+        """Return whether current red-team vision legitimately reveals a unit."""
+        if observers is None:
+            observers = self._living_red_units()
+        position = (unit.x, unit.y)
+        if dist(position, (self.game.enemy_base.x, self.game.enemy_base.y)) <= (
+            self.KEEP_VISION_RADIUS
+        ):
+            return True
+        return any(
+            dist(position, (observer.x, observer.y)) <= self.SCOUTING_RADIUS
+            for observer in observers
+        )
+
     def _update_strategic_knowledge(self):
         """Remember only player units actually observed by red scouts or the keep."""
         observers = self._living_red_units()
-        base_pos = (self.game.enemy_base.x, self.game.enemy_base.y)
-        for unit in self.game.units:
-            if unit.team != "green" or unit.health <= 0:
+        currently_observed = set()
+        for unit in sorted(self.game.units, key=lambda candidate: candidate.uid):
+            if unit.team != "green":
                 continue
-            observed = dist((unit.x, unit.y), base_pos) <= self.KEEP_VISION_RADIUS
-            observed = observed or any(
-                dist((unit.x, unit.y), (scout.x, scout.y)) <= self.SCOUTING_RADIUS
-                for scout in observers
-            )
-            if observed:
+            if self._player_unit_is_visible(unit, observers):
+                if unit.health <= 0:
+                    if (
+                        unit.uid in self.player_knowledge
+                        or unit.uid in self.combat_observations
+                    ):
+                        self.combat_observation_revision += 1
+                    self.player_knowledge.pop(unit.uid, None)
+                    self.combat_observations.pop(unit.uid, None)
+                    self.last_seen_player_army.pop(unit.uid, None)
+                    continue
+                currently_observed.add(unit.uid)
                 self.player_knowledge[unit.uid] = (unit.kind, self.elapsed)
+                self.last_seen_player_army[unit.uid] = LastSeenPlayerUnit(
+                    unit.uid,
+                    unit.kind,
+                    unit.x,
+                    unit.y,
+                    unit.health,
+                    self.elapsed,
+                )
+                previous = self.combat_observations.get(unit.uid)
+                facts = (unit.kind, unit.x, unit.y, unit.health)
+                old_facts = (
+                    (previous.kind, previous.x, previous.y, previous.health)
+                    if previous else None
+                )
+                if facts != old_facts:
+                    self.combat_observation_revision += 1
+                self.combat_observations[unit.uid] = ObservedCombatUnit(
+                    unit.uid,
+                    unit.kind,
+                    unit.x,
+                    unit.y,
+                    unit.health,
+                    self.elapsed,
+                    self.combat_observation_revision,
+                )
+        if currently_observed != self._currently_observed_player_uids:
+            self.combat_observation_revision += 1
+        self._currently_observed_player_uids = currently_observed
         self.player_knowledge = {
             uid: sighting for uid, sighting in self.player_knowledge.items()
             if self.elapsed - sighting[1] <= self.PLAYER_KNOWLEDGE_TTL
         }
+        known_uids = set(self.player_knowledge)
+        self.combat_observations = {
+            uid: sighting for uid, sighting in self.combat_observations.items()
+            if uid in known_uids
+        }
+        self.last_seen_player_army = dict(sorted(
+            self.last_seen_player_army.items()
+        ))
+
+    def assess_combat_group(self, group, opponent_uids=None):
+        """Compare a red group with only the opponents in established memory."""
+        group = tuple(
+            unit for unit in group
+            if unit.team == "red" and unit.health > 0
+        )
+        if not group:
+            raise ValueError("A combat group must contain living red units")
+        observations = tuple(self.combat_observations.values())
+        if opponent_uids is None:
+            opponents = tuple(
+                sighting for sighting in observations
+                if min(
+                    dist((sighting.x, sighting.y), (unit.x, unit.y))
+                    for unit in group
+                ) <= self.COMBAT_ENGAGEMENT_RADIUS
+            )
+        else:
+            requested = set(opponent_uids)
+            opponents = tuple(
+                sighting for sighting in observations if sighting.uid in requested
+            )
+        own_reinforcements = tuple(
+            unit for unit in self._living_red_units()
+            if unit.uid not in {member.uid for member in group}
+        )
+        opponent_ids = {opponent.uid for opponent in opponents}
+        opponent_reinforcements = tuple(
+            sighting for sighting in observations
+            if sighting.uid not in opponent_ids
+        )
+        return self.combat_evaluator.assess(
+            group,
+            opponents,
+            self.elapsed,
+            self.combat_observation_revision,
+            own_reinforcements,
+            opponent_reinforcements,
+        )
+
+    def evaluate_engaged_combat_groups(self):
+        """Refresh assessments for the AI's existing strategic combat groups."""
+        groups = []
+        for uids in (self.squad, self.defenders, self.reserve):
+            units = [
+                unit for unit in self._living_red_units() if unit.uid in uids
+            ]
+            if units:
+                groups.append(units)
+        return [
+            self.assess_combat_group(group)
+            for group in groups
+            if any(
+                min(dist((seen.x, seen.y), (unit.x, unit.y)) for unit in group)
+                <= self.COMBAT_ENGAGEMENT_RADIUS
+                for seen in self.combat_observations.values()
+            )
+        ]
+
+    def _field_combat_assessment(self):
+        """Reassess the wave against current or recently engaged opponents."""
+        if self.state not in (AIState.ATTACKING, AIState.RECOVERING):
+            return None
+        group = self._squad_units()
+        if not group:
+            return None
+        nearby = {
+            seen.uid
+            for seen in self.combat_observations.values()
+            if min(
+                dist((seen.x, seen.y), (unit.x, unit.y)) for unit in group
+            ) <= self.COMBAT_ENGAGEMENT_RADIUS
+        }
+        currently_seen = nearby & self._currently_observed_player_uids
+        if currently_seen:
+            self.combat_opponent_uids.update(nearby)
+        remembered = self.combat_opponent_uids & set(self.combat_observations)
+        if not remembered:
+            return None
+        return self.assess_combat_group(group, remembered)
+
+    def _strength_decision(self, assessment):
+        """Return retreat/re-engage after hysteresis and decision throttling."""
+        if assessment is None:
+            return None
+        ratio = assessment.advantage_ratio
+        if assessment.stale:
+            proposed = "retreat" if self.state == AIState.ATTACKING else "hold"
+        elif self.state == AIState.ATTACKING:
+            proposed = "retreat" if ratio <= self.COMBAT_RETREAT_RATIO else "hold"
+        else:
+            proposed = (
+                "reengage" if ratio >= self.COMBAT_REENGAGE_RATIO else "hold"
+            )
+
+        urgent = (
+            proposed == "retreat"
+            and (assessment.stale or ratio <= self.COMBAT_URGENT_RETREAT_RATIO)
+        ) or (
+            proposed == "reengage"
+            and ratio >= self.COMBAT_URGENT_REENGAGE_RATIO
+        )
+        interval_elapsed = (
+            self.elapsed - self.last_combat_decision_at
+            >= self.COMBAT_DECISION_INTERVAL
+        )
+        if not urgent and not interval_elapsed:
+            return None
+        self.last_combat_decision_at = self.elapsed
+        self.last_combat_decision = proposed
+        return proposed
+
+    def _attack_objective_is_reachable(self):
+        """Return whether the open battlefield has a usable attack objective."""
+        objective = self.game.player_base
+        if objective is None or objective.health <= 0:
+            return False
+        return (
+            math.isfinite(objective.x)
+            and math.isfinite(objective.y)
+            and WORLD_MIN <= objective.x <= WORLD_MAX
+            and WORLD_MIN <= objective.y <= WORLD_MAX
+        )
+
+    def _attack_hard_safety_reason(self):
+        """Critical rules that always outrank casualty and strength decisions."""
+        if not self._squad_units():
+            return "no_viable_combat_units"
+        if not self._attack_objective_is_reachable():
+            return "no_valid_or_reachable_objective"
+        return None
+
+    def _casualty_retreat_is_overridden(self, assessment):
+        """Allow casualty-hit attackers to continue only on fresh strong evidence."""
+        if assessment is None or assessment.stale:
+            return False
+        return (
+            assessment.classification == CombatAdvantage.STRONGER
+            and self.elapsed - assessment.evaluated_at
+            <= self.combat_evaluator.PERIODIC_REFRESH
+            and assessment.advantage_ratio > self.CASUALTY_ADVANTAGE_MARGIN
+        )
+
+    def _can_finish_objective(self, assessment):
+        """Keep firing on a nearly destroyed keep unless defenders dominate."""
+        objective = self.game.player_base
+        if objective is None or objective.health <= 0:
+            return False
+        attackers = [
+            unit for unit in self._squad_units()
+            if dist((unit.x, unit.y), (objective.x, objective.y))
+            <= unit.attack_range + 2.3
+        ]
+        if not attackers:
+            return False
+        if (
+            assessment is not None
+            and not assessment.stale
+            and assessment.advantage_ratio <= self.COMBAT_URGENT_RETREAT_RATIO
+        ):
+            return False
+        damage_per_second = sum(
+            unit.damage / unit.cooldown for unit in attackers
+        )
+        return (
+            objective.health / max(damage_per_second, 1e-9)
+            <= self.OBJECTIVE_FINISH_SECONDS
+        )
+
+    def forget_player_unit(self, uid):
+        """Forget a dead player unit only when red vision confirms its death."""
+        unit = next(
+            (candidate for candidate in self.game.units if candidate.uid == uid),
+            None,
+        )
+        visibly_confirmed = (
+            unit is not None and self._player_unit_is_visible(unit)
+        )
+        if not visibly_confirmed:
+            return
+        known = (
+            uid in self.player_knowledge
+            or uid in self.combat_observations
+            or uid in self._currently_observed_player_uids
+            or uid in self.combat_opponent_uids
+        )
+        self.player_knowledge.pop(uid, None)
+        self.combat_observations.pop(uid, None)
+        self._currently_observed_player_uids.discard(uid)
+        self.combat_opponent_uids.discard(uid)
+        self.last_seen_player_army.pop(uid, None)
+        if known:
+            self.combat_observation_revision += 1
 
     def _record_losses(self):
         living = {unit.uid: unit.kind for unit in self._living_red_units()}
@@ -358,26 +998,68 @@ class EnemyAI:
         ]
 
     def known_player_composition(self):
-        counts = {"swordsman": 0, "archer": 0}
+        counts = {kind: 0 for kind in UNIT_KINDS}
         for kind, _ in self.player_knowledge.values():
             counts[kind] += 1
         return counts
 
+    def last_seen_player_composition(self):
+        """Return deterministic per-kind unit counts and invested essence."""
+        counts = {kind: 0 for kind in UNIT_KINDS}
+        essence = {kind: 0 for kind in UNIT_KINDS}
+        for sighting in self.last_seen_player_army.values():
+            counts[sighting.kind] += 1
+            essence[sighting.kind] += UNIT_COSTS[sighting.kind]
+        return counts, essence
+
+    def _update_archer_threat_level(self):
+        """Update the remembered archer tier with a one-unit hysteresis band."""
+        count = self.known_player_composition()["archer"]
+        level = self.archer_threat_level
+        if level == "low":
+            if count >= self.ARCHER_THREAT_HIGH_THRESHOLD:
+                level = "high"
+            elif count >= self.ARCHER_THREAT_MODERATE_THRESHOLD:
+                level = "moderate"
+        elif level == "moderate":
+            if count >= self.ARCHER_THREAT_HIGH_THRESHOLD:
+                level = "high"
+            elif count < (
+                self.ARCHER_THREAT_MODERATE_THRESHOLD
+                - self.ARCHER_THREAT_HYSTERESIS
+            ):
+                level = "low"
+        elif count < (
+            self.ARCHER_THREAT_HIGH_THRESHOLD
+            - self.ARCHER_THREAT_HYSTERESIS
+        ):
+            level = (
+                "moderate"
+                if count >= self.ARCHER_THREAT_MODERATE_THRESHOLD
+                else "low"
+            )
+        self.archer_threat_level = level
+        return level
+
     def production_scores(self, threat_score=None):
         """Return deterministic weighted utility for each recruitable unit."""
         threat_score = self.last_threat_score if threat_score is None else threat_score
-        own = {"swordsman": 0, "archer": 0}
-        assigned = {"swordsman": 0, "archer": 0}
+        own = {kind: 0 for kind in UNIT_KINDS}
+        assigned = {kind: 0 for kind in UNIT_KINDS}
+        squad_counts = {kind: 0 for kind in UNIT_KINDS}
         assigned_uids = self.squad | self.reserve | self.defenders
         for unit in self._living_red_units():
             own[unit.kind] += 1
             if unit.uid in assigned_uids:
                 assigned[unit.kind] += 1
+            if unit.uid in self.squad:
+                squad_counts[unit.kind] += 1
         known = self.known_player_composition()
         known_total = sum(known.values())
         scores = {
             "swordsman": self.BASE_SWORD_SCORE,
             "archer": self.BASE_ARCHER_SCORE,
+            "shield": self.BASE_SHIELD_SCORE,
         }
         for kind in scores:
             scores[kind] += self.STATE_PRODUCTION_WEIGHTS[self.state][kind]
@@ -388,63 +1070,155 @@ class EnemyAI:
                 known["archer"] / known_total * self.EXPOSED_ARCHER_SWORD_BONUS
             )
             scores["archer"] += (
-                known["swordsman"] / known_total * self.PLAYER_SWORD_ARCHER_BONUS
+                (known["swordsman"] + known["shield"]) / known_total
+                * self.PLAYER_SWORD_ARCHER_BONUS
             )
+            scores["shield"] += (
+                known["swordsman"] / known_total * self.PLAYER_MELEE_SHIELD_BONUS
+            )
+        archer_threat_level = self._update_archer_threat_level()
+        scores["shield"] += self.ARCHER_THREAT_SHIELD_BONUS[archer_threat_level]
+        scores["swordsman"] -= self.ARCHER_THREAT_SWORD_PENALTY[archer_threat_level]
 
         total = sum(own.values())
+        projected_sword_ratio = (own["swordsman"] + 1) / (total + 1)
+        if projected_sword_ratio > self.SWORD_TARGET_RATIO:
+            scores["swordsman"] -= (
+                (projected_sword_ratio - self.SWORD_TARGET_RATIO)
+                * self.SWORD_OVER_TARGET_PENALTY
+            )
+        frontline = own["swordsman"] + own["shield"]
         required_frontline = max(
             self.MIN_FRONTLINE,
             math.ceil((total + 1) * self.FRONTLINE_RATIO),
         )
-        frontline_shortage = max(0, required_frontline - own["swordsman"])
-        scores["swordsman"] += frontline_shortage * self.FRONTLINE_SHORTAGE_BONUS
-        if own["swordsman"] >= required_frontline:
+        frontline_shortage = max(0, required_frontline - frontline)
+        scores["swordsman"] += (
+            frontline_shortage * self.FRONTLINE_SHORTAGE_SWORD_BONUS
+        )
+        scores["shield"] += (
+            frontline_shortage * self.FRONTLINE_SHORTAGE_SHIELD_BONUS
+        )
+        if frontline >= required_frontline:
             scores["archer"] += self.PROTECTED_ARCHER_BONUS
             if total >= self.MIN_SQUAD_STRENGTH and own["archer"] == 0:
                 scores["archer"] += self.MISSING_BACKLINE_BONUS
         else:
             scores["archer"] -= self.UNPROTECTED_ARCHER_PENALTY
+        if own["archer"] and own["shield"] == 0:
+            scores["shield"] += self.DURABLE_FRONTLINE_BONUS
+        if squad_counts["archer"] and squad_counts["shield"] == 0:
+            scores["shield"] += self.SQUAD_SHIELD_SHORTAGE_BONUS
+        if self.state == AIState.DEFENDING:
+            scores["shield"] += self.BASE_DEFENSE_SHIELD_BONUS
 
         if threat_score >= self.SERIOUS_THREAT_SCORE:
             scores["swordsman"] += self.EMERGENCY_SWORD_BONUS
+            scores["shield"] -= self.URGENT_SHIELD_PENALTY
         loss_counts = {
             kind: sum(loss_kind == kind for _, loss_kind in self.recent_losses)
-            for kind in ("swordsman", "archer")
+            for kind in ENEMY_PRODUCTION_KINDS
         }
         scores["swordsman"] += loss_counts["swordsman"] * self.RECENT_SWORD_LOSS_BONUS
         scores["archer"] += loss_counts["archer"] * self.RECENT_ARCHER_LOSS_BONUS
+        scores["shield"] += loss_counts["shield"] * self.RECENT_SHIELD_LOSS_BONUS
         scores["swordsman"] += self.failed_waves * self.FAILED_WAVE_FRONTLINE_BONUS
+        scores["shield"] += self.failed_waves * self.FAILED_WAVE_SHIELD_BONUS
 
         # Assigned composition matters explicitly: an attack with no assigned screen
         # should replenish melee even if unassigned archers are waiting at home.
-        if assigned["archer"] and not assigned["swordsman"]:
-            scores["swordsman"] += self.FRONTLINE_SHORTAGE_BONUS
+        if assigned["archer"] and not (assigned["swordsman"] + assigned["shield"]):
+            scores["swordsman"] += self.FRONTLINE_SHORTAGE_SWORD_BONUS
+            scores["shield"] += self.FRONTLINE_SHORTAGE_SHIELD_BONUS
+        if own["shield"] and not (own["swordsman"] + own["archer"]):
+            scores["shield"] -= self.SHIELD_ONLY_PENALTY
+            scores["swordsman"] += self.SHIELD_ONLY_SWORD_BONUS
         if self.last_production_choice:
             scores[self.last_production_choice] += self.SCORE_HYSTERESIS
         self.last_production_scores = scores
         return scores
 
+    def production_essence_investment(self):
+        """Return current red-army essence invested in each unit kind."""
+        invested = {kind: 0 for kind in ENEMY_PRODUCTION_KINDS}
+        for unit in self._living_red_units():
+            invested[unit.kind] += UNIT_COSTS[unit.kind]
+        return invested
+
+    def production_target_shares(self):
+        """Map last-seen player essence into deterministic counter shares."""
+        if not self.last_seen_player_army:
+            return {
+                kind: 1 / len(ENEMY_PRODUCTION_KINDS)
+                for kind in ENEMY_PRODUCTION_KINDS
+            }
+        _, player_essence = self.last_seen_player_composition()
+        total = sum(player_essence.values())
+        shares = {kind: 0.0 for kind in ENEMY_PRODUCTION_KINDS}
+        for player_kind, contribution in player_essence.items():
+            shares[self.PRODUCTION_COUNTERS[player_kind]] += contribution / total
+        return shares
+
+    def _production_balance(self):
+        """Describe current spending against the strategic essence target."""
+        invested = self.production_essence_investment()
+        shares = self.production_target_shares()
+        total = sum(invested.values())
+        return {
+            "target_shares": shares,
+            "spent_essence": invested,
+            "target_essence": {
+                kind: total * shares[kind] for kind in ENEMY_PRODUCTION_KINDS
+            },
+            "deficits": {
+                kind: total * shares[kind] - invested[kind]
+                for kind in ENEMY_PRODUCTION_KINDS
+            },
+        }
+
+    def _target_essence_choice(self, available):
+        """Choose the purchase that most reduces projected target-share error."""
+        invested = self.production_essence_investment()
+        target_shares = self.production_target_shares()
+
+        def projected_error(kind):
+            projected = invested.copy()
+            projected[kind] += UNIT_COSTS[kind]
+            total = sum(projected.values())
+            return sum(
+                abs(projected[other] / total - target_shares[other])
+                for other in ENEMY_PRODUCTION_KINDS
+            )
+
+        order = {kind: index for index, kind in enumerate(ENEMY_PRODUCTION_KINDS)}
+        return min(
+            available,
+            key=lambda kind: (projected_error(kind), order[kind]),
+        )
+
     def choose_production(self, threat_score=None):
         scores = self.production_scores(threat_score)
         essence = self.game.enemy_essence
+        available = [
+            kind for kind in ENEMY_PRODUCTION_KINDS
+            if kind not in self.unavailable_production_kinds
+        ]
         affordable = [
-            kind for kind in ("swordsman", "archer")
-            if essence >= UNIT_COSTS[kind]
+            kind for kind in available if essence >= UNIT_COSTS[kind]
         ]
         if not affordable:
             return None
-        best = max(("swordsman", "archer"), key=lambda kind: (scores[kind], kind))
-        if best == "archer" and essence < UNIT_COSTS["archer"]:
-            serious = (threat_score if threat_score is not None else self.last_threat_score)
-            if (
-                serious < self.SERIOUS_THREAT_SCORE
-                and scores["archer"] >= scores["swordsman"] + self.SAVE_FOR_ARCHER_MARGIN
-            ):
+        best = self._target_essence_choice(available)
+        if best not in affordable:
+            serious = (
+                threat_score
+                if threat_score is not None
+                else self.last_threat_score
+            )
+            if serious < self.SERIOUS_THREAT_SCORE:
                 return None
-            best = "swordsman"
-        return best if best in affordable else max(
-            affordable, key=lambda kind: (scores[kind], kind)
-        )
+            best = self._target_essence_choice(affordable)
+        return best
 
     def _run_production(self, threat_score):
         if self.recruitment_timer > 0:
@@ -454,13 +1228,18 @@ class EnemyAI:
             # Reconsider savings frequently without allowing per-frame oscillation.
             self.recruitment_timer = self.PRODUCTION_INTERVAL / 3
             return None
+        balance_before = self._production_balance()
         if self.game.recruit(kind, "red"):
             self.last_production_choice = kind
+            balance_after = self._production_balance()
             self.production_history.append({
                 "time": self.elapsed,
                 "state": self.state.name,
                 "kind": kind,
                 "scores": self.last_production_scores.copy(),
+                "target_shares": balance_before["target_shares"],
+                "spent_essence": balance_after["spent_essence"],
+                "selected_deficit": balance_before["deficits"][kind],
             })
             self._known_red_uids[self.game.units[-1].uid] = kind
             self.recruitment_timer = self.PRODUCTION_INTERVAL
@@ -573,6 +1352,82 @@ class EnemyAI:
         )
         return in_position / len(members) >= self.FORMATION_READY_FRACTION
 
+    def _launch_strength_gate(self):
+        """Require the complete proposed wave to beat the last-seen player army.
+
+        Strategic sightings persist after tactical observations become stale, so
+        launch authorization uses CombatStrengthEvaluator's numeric ratio rather
+        than its freshness-sensitive classification.  The safety margin is the
+        evaluator's documented STRONGER_RATIO (currently 1.25).
+        """
+        members = tuple(self._squad_units())
+        if not members:
+            return False
+        if not self.last_seen_player_army:
+            assessment = self.combat_evaluator.assess(
+                members,
+                (),
+                self.elapsed,
+                self.combat_observation_revision,
+            )
+            diagnostic = {
+                "time": self.elapsed,
+                "own_strength": assessment.own_strength,
+                "opponent_strength": assessment.opponent_strength,
+                "ratio": assessment.advantage_ratio,
+                "decision": (
+                    "bootstrap_ready"
+                    if len(members) >= self.MIN_SQUAD_STRENGTH
+                    else "bootstrap_wait"
+                ),
+                "observation_revision": self.combat_observation_revision,
+            }
+            passed = len(members) >= self.MIN_SQUAD_STRENGTH
+        else:
+            opponents = tuple(
+                ObservedCombatUnit(
+                    seen.uid,
+                    seen.kind,
+                    seen.x,
+                    seen.y,
+                    seen.health,
+                    seen.observed_at,
+                    self.combat_observation_revision,
+                )
+                for seen in self.last_seen_player_army.values()
+            )
+            assessment = self.combat_evaluator.assess(
+                members,
+                opponents,
+                self.elapsed,
+                self.combat_observation_revision,
+            )
+            passed = (
+                assessment.advantage_ratio
+                >= self.combat_evaluator.STRONGER_RATIO
+            )
+            diagnostic = {
+                "time": self.elapsed,
+                "own_strength": assessment.own_strength,
+                "opponent_strength": assessment.opponent_strength,
+                "ratio": assessment.advantage_ratio,
+                "decision": "strength_pass" if passed else "strength_hold",
+                "observation_revision": self.combat_observation_revision,
+            }
+        signature = (
+            tuple((unit.uid, unit.kind, round(unit.health, 6))
+                  for unit in members),
+            tuple((seen.uid, seen.kind, round(seen.health, 6))
+                  for seen in self.last_seen_player_army.values()),
+            diagnostic["decision"],
+            self.combat_observation_revision,
+        )
+        self.last_launch_gate = diagnostic
+        if signature != self._launch_gate_signature:
+            self.launch_gate_history.append(diagnostic.copy())
+            self._launch_gate_signature = signature
+        return passed
+
     def _launch_wave(self):
         members = self._squad_units()
         if not members:
@@ -581,21 +1436,27 @@ class EnemyAI:
         self.wave_start_strength = len(members)
         composition = {
             kind: sum(unit.kind == kind for unit in members)
-            for kind in ("swordsman", "archer")
+            for kind in UNIT_KINDS
         }
         self.wave_history.append({
             "wave": self.wave_number,
             "launched_at": self.elapsed,
             "wait": self.rally_elapsed,
             "composition": composition,
+            "launch_gate": self.last_launch_gate.copy()
+            if self.last_launch_gate else None,
         })
         self.transition_to(AIState.ATTACKING)
+        self.combat_opponent_uids.clear()
+        self.last_combat_decision_at = float("-inf")
+        self.last_combat_decision = None
         for unit in members:
             unit.target = None
-            unit.target_pos = (self.game.player_base.x, self.game.player_base.y)
+        self._advance_wave()
 
     def _advance_wave(self):
         """Advance toward the objective while allowing local combat to take priority."""
+        self.recovery_guards.clear()
         members = self._squad_units()
         if not members:
             return
@@ -603,39 +1464,63 @@ class EnemyAI:
             (self.game.enemy_base.x, self.game.enemy_base.y),
             (self.game.player_base.x, self.game.player_base.y),
         )
-        front = min(unit.x * advance_x + unit.y * advance_y for unit in members)
+        formation_progress = {
+            unit.uid: (
+                unit.x * advance_x + unit.y * advance_y
+                + self.FORMATION_FORWARD_OFFSETS[self._formation_role(unit)]
+            )
+            for unit in members
+        }
+        front = min(formation_progress.values())
+        anchor_tolerance = max(
+            0.0,
+            self.WAVE_COHESION_TOLERANCE
+            - max(self.FORMATION_FORWARD_OFFSETS.values()),
+        )
+        objective = (self.game.player_base.x, self.game.player_base.y)
         for unit in members:
             if unit.target is not None:
                 continue
-            progress = unit.x * advance_x + unit.y * advance_y
-            # Faster rear units wait when they would split far ahead of the wave.
-            if progress > front + self.WAVE_COHESION_TOLERANCE:
+            progress = formation_progress[unit.uid]
+            # Any rank that outruns the common formation anchor waits for the
+            # rest; otherwise idle movement restores its centered rank slot.
+            if progress > front + anchor_tolerance:
                 unit.target_pos = (unit.x, unit.y)
             else:
-                rear_offset = (
-                    self.LINE_SPACING
-                    if self.formation_roles.get(unit.uid) == "rear"
-                    else 0.0
-                )
-                unit.target_pos = (
-                    self.game.player_base.x - advance_x * rear_offset,
-                    self.game.player_base.y - advance_y * rear_offset,
+                unit.target_pos = self._formation_destination(
+                    unit, members, anchor=objective
                 )
 
     def _begin_recovery(self):
+        self._cleanup_squad()
         if self.wave_start_strength and len(self._squad_units()) < self.wave_start_strength:
             self.failed_waves += 1
         self.transition_to(AIState.RECOVERING)
         self.recovery_elapsed = 0.0
-        for unit in self._squad_units():
+        members = self._squad_units()
+        player_base = (self.game.player_base.x, self.game.player_base.y)
+        guards = sorted(
+            (unit for unit in members if unit.kind == "shield"),
+            key=lambda unit: (dist((unit.x, unit.y), player_base), unit.uid),
+        )[:2]
+        self.recovery_guards = {unit.uid for unit in guards}
+        for unit in members:
             unit.target = None
-            unit.target_pos = self.rally_point
+            unit.target_pos = (
+                (unit.x, unit.y)
+                if unit.uid in self.recovery_guards
+                else self.rally_point
+            )
 
     def _finish_recovery(self):
         self.squad.clear()
+        self.recovery_guards.clear()
         self.formation_roles.clear()
         self.wave_start_strength = 0
         self.rally_elapsed = 0.0
+        self.combat_opponent_uids.clear()
+        self.last_combat_decision_at = float("-inf")
+        self.last_combat_decision = None
         next_state = AIState.RALLYING if self._living_red_units() else AIState.BUILDING
         self.transition_to(next_state)
 
@@ -678,12 +1563,15 @@ class EnemyAI:
         if target.health <= unit.damage:
             score += 32.0
 
-        if unit.kind == "swordsman" and target.kind == "archer":
+        if unit.kind in MELEE_UNIT_KINDS and target.kind == "archer":
             score += 34.0
         elif unit.kind == "archer":
             if target.kind == "archer":
                 score += 12.0
-            if target.damage >= unit.health or target.kind == "swordsman" and distance <= 5.0:
+            if (
+                target.damage >= unit.health
+                or target.kind in MELEE_UNIT_KINDS and distance <= 5.0
+            ):
                 score += 22.0
 
         # Locally protect fragile allied archers.
@@ -709,6 +1597,31 @@ class EnemyAI:
         return score
 
     def choose_target(self, unit):
+        # A recovering squad has received an explicit retreat order. Local
+        # awareness must not turn that order back into an individual attack;
+        # the strategic controller will either re-engage the whole squad or
+        # interrupt recovery to defend the keep.
+        if self.state == AIState.RECOVERING and unit.uid in self.squad:
+            if unit.uid in self.recovery_guards:
+                candidates = [
+                    opponent for opponent in self.game.units
+                    if opponent.team != unit.team
+                    and opponent.health > 0
+                    and dist((unit.x, unit.y), (opponent.x, opponent.y))
+                    <= unit.attack_range
+                ]
+                unit.target = min(
+                    candidates,
+                    key=lambda opponent: (
+                        dist((unit.x, unit.y), (opponent.x, opponent.y)),
+                        opponent.uid,
+                    ),
+                    default=None,
+                )
+                return unit.target
+            unit.target = None
+            return None
+
         candidates = [
             opponent for opponent in self.game.units
             if opponent.team != unit.team and self._is_valid_target(unit, opponent)
@@ -761,7 +1674,7 @@ class EnemyAI:
             length = math.hypot(dx, dy)
             if length > radius:
                 x, y = anchor[0] + dx / length * radius, anchor[1] + dy / length * radius
-        return clamp(x, .5, MAP_SIZE - .5), clamp(y, .5, MAP_SIZE - .5)
+        return clamp_to_map((x, y))
 
     def _separation_vector(self, unit):
         sx = sy = 0.0
@@ -784,13 +1697,21 @@ class EnemyAI:
     def tactical_destination(self, unit, dt):
         """Return a short-lived local steering goal for enemy units only."""
         unit.tactical_timer = max(0.0, unit.tactical_timer - dt)
+        if (
+            self.state == AIState.RECOVERING
+            and unit.uid in self.recovery_guards
+        ):
+            unit.tactical_pos = None
+            return None
         opponents = [
             other for other in self.game.units
             if other.team != unit.team and other.health > 0
         ]
 
         if unit.kind == "archer":
-            melee = [other for other in opponents if other.kind == "swordsman"]
+            melee = [
+                other for other in opponents if other.kind in MELEE_UNIT_KINDS
+            ]
             threat = min(
                 melee,
                 key=lambda other: dist((unit.x, unit.y), (other.x, other.y)),
@@ -847,7 +1768,7 @@ class EnemyAI:
                 return unit.tactical_pos
             unit.tactical_pos = None
 
-        elif unit.kind == "swordsman":
+        elif unit.kind in MELEE_UNIT_KINDS:
             allied_archers = [
                 ally for ally in self.game.units
                 if ally.team == unit.team and ally.kind == "archer" and ally.health > 0
@@ -905,6 +1826,8 @@ class EnemyAI:
         self.recruitment_timer -= self.decision_interval
         self._record_losses()
         self._update_strategic_knowledge()
+        self.evaluate_engaged_combat_groups()
+        field_assessment = self._field_combat_assessment()
         threats = self._player_threats()
         threat_score = sum(danger for _, danger in threats)
         self.last_threat_score = threat_score
@@ -919,10 +1842,11 @@ class EnemyAI:
         if self.state == AIState.DEFENDING:
             self._cleanup_squad()
             melee_threat = sum(
-                danger for unit, danger in threats if unit.kind == "swordsman"
+                danger for unit, danger in threats
+                if unit.kind in MELEE_UNIT_KINDS
             )
             has_melee_defender = any(
-                unit.uid in self.defenders and unit.kind == "swordsman"
+                unit.uid in self.defenders and unit.kind in MELEE_UNIT_KINDS
                 for unit in self._living_red_units()
             )
             if (
@@ -931,6 +1855,7 @@ class EnemyAI:
                 and not self.emergency_recruited
                 and self.game.enemy_essence >= UNIT_COSTS["swordsman"]
             ):
+                balance_before = self._production_balance()
                 if self.game.recruit("swordsman", "red"):
                     recruit = self.game.units[-1]
                     self.reserve.add(recruit.uid)
@@ -938,12 +1863,16 @@ class EnemyAI:
                     self.emergency_recruited = True
                     self._known_red_uids[recruit.uid] = recruit.kind
                     self.last_production_choice = "swordsman"
+                    balance_after = self._production_balance()
                     self.production_history.append({
                         "time": self.elapsed,
                         "state": self.state.name,
                         "kind": "swordsman",
                         "scores": self.production_scores(threat_score).copy(),
                         "emergency": True,
+                        "target_shares": balance_before["target_shares"],
+                        "spent_essence": balance_after["spent_essence"],
+                        "selected_deficit": balance_before["deficits"]["swordsman"],
                     })
                     self.recruitment_timer = self.PRODUCTION_INTERVAL
             self._run_production(threat_score)
@@ -968,21 +1897,62 @@ class EnemyAI:
         if self.state == AIState.RALLYING:
             self.rally_elapsed += self.decision_interval
             self._assign_available_units()
-            strong_enough = len(self.squad) >= self.MIN_SQUAD_STRENGTH
+            strength_gate_passed = self._launch_strength_gate()
             timed_out = self.rally_elapsed >= self.MAX_RALLY_WAIT
-            if self.squad and ((strong_enough and self._formation_ready()) or timed_out):
+            if self.last_seen_player_army:
+                launch_ready = (
+                    strength_gate_passed
+                    and (self._formation_ready() or timed_out)
+                )
+            else:
+                # Bootstrap preserves the legacy rule: form a minimum-sized
+                # wave, or eventually send the available scouts on timeout.
+                launch_ready = (
+                    len(self.squad) >= self.MIN_SQUAD_STRENGTH
+                    and self._formation_ready()
+                ) or timed_out
+                if launch_ready and not strength_gate_passed:
+                    self.last_launch_gate["decision"] = "bootstrap_timeout"
+                    self.launch_gate_history.append(
+                        self.last_launch_gate.copy()
+                    )
+            if self.squad and launch_ready:
                 self._launch_wave()
         elif self.state == AIState.ATTACKING:
             living_strength = len(self.squad)
             losses = self.wave_start_strength - living_strength
             loss_fraction = losses / max(1, self.wave_start_strength)
-            if living_strength == 0 or loss_fraction >= self.RECOVERY_LOSS_FRACTION:
+            hard_safety_reason = self._attack_hard_safety_reason()
+            casualty_retreat = (
+                loss_fraction >= self.RECOVERY_LOSS_FRACTION
+            )
+            # Decision precedence:
+            # 1. Hard safety always ends the attack.
+            # 2. Only a fresh advantage above CASUALTY_ADVANTAGE_MARGIN can
+            #    override the casualty trigger.
+            # 3. A weaker assessment retreats.
+            # 4. Uncertain, missing, or stale evidence falls back to retreat
+            #    when casualties have already made retreat necessary.
+            if hard_safety_reason is not None:
+                self._begin_recovery()
+            elif self._can_finish_objective(field_assessment):
+                self._advance_wave()
+            elif casualty_retreat:
+                if self._casualty_retreat_is_overridden(field_assessment):
+                    self._advance_wave()
+                else:
+                    self._begin_recovery()
+            elif self._strength_decision(field_assessment) == "retreat":
                 self._begin_recovery()
             else:
                 self._advance_wave()
         elif self.state == AIState.RECOVERING:
             self.recovery_elapsed += self.decision_interval
-            if self.recovery_elapsed >= self.RECOVERY_DURATION:
+            if self._strength_decision(field_assessment) == "reengage":
+                self.transition_to(AIState.ATTACKING)
+                self.recovery_elapsed = 0.0
+                self._advance_wave()
+            elif self.recovery_elapsed >= self.RECOVERY_DURATION:
                 self._finish_recovery()
 
 
@@ -994,6 +1964,7 @@ class Button:
         self.disabled_sub = disabled_sub
 
     def draw(self, surf, mouse, label_font, cost_font, enabled=True):
+        self.enabled = enabled
         hover = self.rect.collidepoint(mouse)
         color = (88, 73, 53) if enabled else (60, 57, 53)
         if hover and enabled:
@@ -1029,13 +2000,14 @@ class Game:
 
     def reset(self):
         self.units: list[Unit] = []
-        self.player_base = Base("green", 18, 100)
-        self.enemy_base = Base("red", 177, 100)
+        self.player_base = Base("green", *PLAYER_BASE_POSITION)
+        self.enemy_base = Base("red", *ENEMY_BASE_POSITION)
         self.essence = 400.0
         self.enemy_essence = 500.0
         self.uid = 0
-        self.camera = [20.5, 100.5]
+        self.camera = list(CAMERA_START)
         self.zoom = 13.0
+        self.clamp_camera()
         self.explored = set()
         self.visible = set()
         self._fog_revision = 0
@@ -1051,12 +2023,10 @@ class Game:
         self.essence_tick = 0
         self.reveal_tick = 0
         self.terrain = self.make_terrain()
-        self.add_unit("swordsman", "green", 24, 99)
-        self.add_unit("swordsman", "green", 24, 102)
-        self.add_unit("archer", "green", 26, 100.5)
-        for y in (98, 100, 102):
-            self.add_unit("swordsman", "red", 171, y)
-        self.add_unit("archer", "red", 169, 100)
+        for kind, dx, dy in PLAYER_STARTING_UNITS:
+            self.add_unit(kind, "green", *offset_from(PLAYER_BASE_POSITION, (dx, dy)))
+        for kind, dx, dy in ENEMY_STARTING_UNITS:
+            self.add_unit(kind, "red", *offset_from(ENEMY_BASE_POSITION, (dx, dy)))
         self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
 
     def make_terrain(self):
@@ -1066,9 +2036,9 @@ class Game:
         self.terrain_details = {}
         quiet_zones = (
             (self.player_base.x, self.player_base.y, 4.5),
-            (24.5, 100.5, 3.5),
+            (*offset_from(PLAYER_BASE_POSITION, (5.5, .5)), 3.5),
             (self.enemy_base.x, self.enemy_base.y, 4.5),
-            (170.5, 100.5, 3.5),
+            (*offset_from(ENEMY_BASE_POSITION, (-5.5, .5)), 3.5),
         )
         for x in range(MAP_SIZE):
             for y in range(MAP_SIZE):
@@ -1094,8 +2064,8 @@ class Game:
                     rng.uniform(.2, .8),
                     rng.uniform(-.35, .35),
                 )
-        for x in range(5, 195):
-            y = int(100 + math.sin(x / 17) * 2)
+        for x in range(ROAD_START_X, ROAD_END_X):
+            y = int(MAP_CENTER + math.sin(x / ROAD_WAVE_LENGTH) * 2)
             terrain[(x, y)] = "road"
             terrain[(x, y + 1)] = "road"
             self.terrain_details.pop((x, y), None)
@@ -1103,6 +2073,8 @@ class Game:
         return terrain
 
     def add_unit(self, kind, team, x, y):
+        if kind not in UNIT_KINDS:
+            raise ValueError(f"Invalid unit kind: {kind!r}")
         self.uid += 1
         unit = Unit(kind, team, x, y, uid=self.uid)
         self.units.append(unit)
@@ -1118,7 +2090,23 @@ class Game:
         return (self.camera[0] + (pos[0] - w / 2) / self.zoom,
                 self.camera[1] + (pos[1] - (h - HUD_H) / 2) / self.zoom)
 
+    def clamp_camera(self):
+        """Keep the viewport on the battlefield at every supported zoom."""
+        w, h = self.screen.get_size()
+        half_w = w / (2 * self.zoom)
+        half_h = (h - HUD_H) / (2 * self.zoom)
+        self.camera[0] = (
+            MAP_CENTER if half_w >= MAP_CENTER
+            else clamp(self.camera[0], half_w, MAP_SIZE - half_w)
+        )
+        self.camera[1] = (
+            MAP_CENTER if half_h >= MAP_CENTER
+            else clamp(self.camera[1], half_h, MAP_SIZE - half_h)
+        )
+
     def recruit(self, kind, team="green"):
+        if kind not in UNIT_KINDS:
+            raise ValueError(f"Invalid unit kind: {kind!r}")
         cost = UNIT_COSTS[kind]
         wallet = self.essence if team == "green" else self.enemy_essence
         if wallet < cost:
@@ -1155,7 +2143,9 @@ class Game:
         for i, u in enumerate(selected):
             offset = ((i % cols - (cols - 1) / 2) * 1.15, (i // cols) * 1.15)
             u.target = None
-            u.target_pos = (clamp(world[0] + offset[0], .5, 199.5), clamp(world[1] + offset[1], .5, 199.5))
+            u.target_pos = clamp_to_map(
+                (world[0] + offset[0], world[1] + offset[1])
+            )
 
     def currently_visible_enemy(self, enemy):
         return self.is_visible(enemy.x, enemy.y)
@@ -1189,18 +2179,43 @@ class Game:
         return min(in_range, key=lambda e: dist((unit.x, unit.y), (e.x, e.y)), default=None)
 
     def attack(self, attacker, target):
-        target.health -= attacker.damage
+        damage = attacker.damage
+        if attacker.kind == "archer" and getattr(target, "kind", None) == "shield":
+            damage *= ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER
+        target.health -= damage
         target.flash = .12
         attacker.attack_timer = attacker.cooldown
         if attacker.kind == "archer":
+            attacker.movement_lock_timer = 4 / 3
             self.arrows.append([attacker.x, attacker.y, target.x, target.y, .22, attacker.team])
         else:
             mx, my = (attacker.x + target.x) / 2, (attacker.y + target.y) / 2
             self.particles.append([mx, my, .25, attacker.team])
 
+    def move_unit_toward(self, unit, destination, dt):
+        """Move a unit and record actual displacement during this update."""
+        dx, dy = destination[0] - unit.x, destination[1] - unit.y
+        distance = math.hypot(dx, dy)
+        if distance < .08:
+            return False
+        before = (unit.x, unit.y)
+        step = min(distance, unit.speed * dt)
+        unit.x, unit.y = clamp_to_map(
+            (unit.x + dx / distance * step, unit.y + dy / distance * step)
+        )
+        moved = dist(before, (unit.x, unit.y)) > 1e-9
+        unit.moved_this_update |= moved
+        return moved
+
     def update_unit(self, u, dt):
+        u.moved_this_update = False
         u.attack_timer = max(0, u.attack_timer - dt)
+        if u.movement_lock_timer <= dt + 1e-9:
+            u.movement_lock_timer = 0
+        else:
+            u.movement_lock_timer -= dt
         u.flash = max(0, u.flash - dt)
+        movement_locked = u.kind == "archer" and u.movement_lock_timer > 0
         target = u.target
         if target is not None and getattr(target, "health", 0) <= 0:
             u.target = target = None
@@ -1212,35 +2227,29 @@ class Game:
             self.enemy_ai.tactical_destination(u, dt) if u.team == "red" else None
         )
         if tactical_pos is not None:
-            dx, dy = tactical_pos[0] - u.x, tactical_pos[1] - u.y
-            d = math.hypot(dx, dy)
-            if d < .08:
+            if dist((u.x, u.y), tactical_pos) < .08:
                 u.tactical_pos = None
                 # Negligible local corrections must not consume the whole update.
                 # Otherwise stable formations continually recompute tiny
                 # separation moves and never resume their strategic order.
-            else:
-                step = min(d, u.speed * dt)
-                u.x = clamp(u.x + dx / d * step, .5, MAP_SIZE - .5)
-                u.y = clamp(u.y + dy / d * step, .5, MAP_SIZE - .5)
+            elif not movement_locked and self.move_unit_toward(u, tactical_pos, dt):
                 return
         if target is not None:
             target_range = u.attack_range + (2.3 if isinstance(target, Base) else 0)
             d = dist((u.x, u.y), (target.x, target.y))
             if d <= target_range:
-                if u.attack_timer <= 0:
+                if (
+                    u.attack_timer <= 0
+                    and (u.kind != "archer" or not u.moved_this_update)
+                ):
                     self.attack(u, target)
                 return
             u.target_pos = (target.x, target.y)
         if u.target_pos:
-            dx, dy = u.target_pos[0] - u.x, u.target_pos[1] - u.y
-            d = math.hypot(dx, dy)
-            if d < .08:
+            if dist((u.x, u.y), u.target_pos) < .08:
                 u.target_pos = None
-            else:
-                step = min(d, u.speed * dt)
-                u.x = clamp(u.x + dx / d * step, .5, 199.5)
-                u.y = clamp(u.y + dy / d * step, .5, 199.5)
+            elif not movement_locked:
+                self.move_unit_toward(u, u.target_pos, dt)
 
     def update(self, dt):
         if self.state != "playing" or self.winner:
@@ -1251,6 +2260,9 @@ class Game:
         self.enemy_ai.update(dt)
         for u in list(self.units):
             self.update_unit(u, dt)
+        for unit in self.units:
+            if unit.team == "green" and unit.health <= 0:
+                self.enemy_ai.forget_player_unit(unit.uid)
         self.units[:] = [u for u in self.units if u.health > 0]
         living_targets = self.units + [self.player_base, self.enemy_base]
         for unit in self.units:
@@ -1355,7 +2367,7 @@ class Game:
         if u.team == "red" and not self.is_visible(u.x, u.y):
             return
         sx, sy = self.world_to_screen(u.x, u.y)
-        size = max(8, int(self.zoom * 1.55))
+        size = max(MIN_UNIT_RENDER_SIZE, int(self.zoom * UNIT_RENDER_SCALES[u.kind]))
         rect = pygame.Rect(0, 0, size, size)
         rect.center = (round(sx), round(sy))
         color = GREEN if u.team == "green" else RED
@@ -1382,7 +2394,7 @@ class Game:
                 (rect.centerx + size * .02, rect.centery + size * .2),
                 max(2, size // 10),
             )
-        else:
+        elif u.kind == "archer":
             arc = pygame.Rect(rect.left + size * .15, rect.top + size * .12, size * .62, size * .76)
             pygame.draw.arc(self.screen, (109, 67, 35), arc, -math.pi / 2, math.pi / 2, max(2, size // 8))
             pygame.draw.line(self.screen, CREAM, (arc.centerx, arc.top), (arc.centerx, arc.bottom), max(1, size // 12))
@@ -1401,6 +2413,37 @@ class Game:
                     (rect.right - size * .23, rect.centery - size * .11),
                     (rect.right - size * .23, rect.centery + size * .11),
                 ],
+            )
+        elif u.kind == "shield":
+            rim = [
+                (rect.centerx, rect.top + size * .1),
+                (rect.right - size * .15, rect.top + size * .25),
+                (rect.right - size * .22, rect.bottom - size * .22),
+                (rect.centerx, rect.bottom - size * .08),
+                (rect.left + size * .22, rect.bottom - size * .22),
+                (rect.left + size * .15, rect.top + size * .25),
+            ]
+            pygame.draw.polygon(self.screen, (45, 43, 39), rim)
+            face = [
+                (rect.centerx, rect.top + size * .17),
+                (rect.right - size * .23, rect.top + size * .3),
+                (rect.right - size * .29, rect.bottom - size * .28),
+                (rect.centerx, rect.bottom - size * .16),
+                (rect.left + size * .29, rect.bottom - size * .28),
+                (rect.left + size * .23, rect.top + size * .3),
+            ]
+            pygame.draw.polygon(self.screen, (205, 176, 91), face)
+            pygame.draw.line(
+                self.screen, CREAM,
+                (rect.centerx, rect.top + size * .22),
+                (rect.centerx, rect.bottom - size * .23),
+                max(2, size // 9),
+            )
+            pygame.draw.line(
+                self.screen, CREAM,
+                (rect.left + size * .3, rect.centery - size * .04),
+                (rect.right - size * .3, rect.centery - size * .04),
+                max(2, size // 10),
             )
         self.draw_cracks(rect, u.health / u.max_health, u.uid)
 
@@ -1459,27 +2502,78 @@ class Game:
         pygame.draw.circle(self.screen, (92, 188, 205), (34, top + 29), 12)
         self.screen.blit(self.font.render(f"{int(self.essence):,} essence", True, CREAM), (55, top + 18))
         self.screen.blit(self.small.render("+20 each second", True, (172, 158, 128)), (55, top + 44))
-        sword_btn = Button((245, top + 16, 180, 62), "Raise Swordsman", "200 essence  •  [S]")
+        sword_cost = UNIT_COSTS["swordsman"]
+        archer_cost = UNIT_COSTS["archer"]
+        shield_cost = UNIT_COSTS["shield"]
+        sword_btn = Button(
+            (245, top + 16, 180, 62),
+            "Raise Swordsman",
+            f"{sword_cost} essence  •  [S]",
+        )
         archer_btn = Button(
             (440, top + 16, 180, 62),
             "Raise Archer",
-            "500 essence  •  [A]",
+            f"{archer_cost} essence  •  [A]",
             disabled_text=(190, 184, 169),
             disabled_sub=(168, 160, 145),
         )
-        sword_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font, self.essence >= 200)
-        archer_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font, self.essence >= 500)
-        self.hud_buttons = [(sword_btn, "swordsman"), (archer_btn, "archer")]
-        counts = {k: sum(u.team == "green" and u.kind == k for u in self.units) for k in ("swordsman", "archer")}
+        shield_btn = Button(
+            (635, top + 16, 180, 62),
+            "Raise Shield",
+            f"{shield_cost} essence  •  [Q]",
+        )
+        sword_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font, self.essence >= sword_cost,
+        )
+        archer_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font, self.essence >= archer_cost,
+        )
+        shield_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font, self.essence >= shield_cost,
+        )
+        self.hud_buttons = [
+            (sword_btn, "swordsman"),
+            (archer_btn, "archer"),
+            (shield_btn, "shield"),
+        ]
+        counts = {
+            kind: sum(u.team == "green" and u.kind == kind for u in self.units)
+            for kind in UNIT_KINDS
+        }
         selected = sum(u.selected for u in self.units)
-        info = f"Army: {counts['swordsman']} swordsmen  •  {counts['archer']} archers  •  {selected} selected"
-        self.screen.blit(self.small.render(info, True, (190, 180, 153)), (245, top + 86))
-        controls = "[1] All swords   [2] All archers   [3] All army   •   Right-click: order"
+        sword_label = "sword" if counts["swordsman"] == 1 else "swords"
+        archer_label = "archer" if counts["archer"] == 1 else "archers"
+        shield_label = "shield" if counts["shield"] == 1 else "shields"
+        info = (
+            f"Army: {counts['swordsman']} {sword_label}"
+            f"  •  {counts['archer']} {archer_label}"
+            f"  •  {counts['shield']} {shield_label}  •  {selected} selected"
+        )
+        info_label = self.small.render(info, True, (190, 180, 153))
+        info_rect = info_label.get_rect(topleft=(245, top + 84))
+        self.screen.blit(info_label, info_rect)
+        controls = (
+            "[1] Swords   [2] Archers   [4] Shields   [3] All army"
+            "   •   Right-click: order"
+        )
         label = self.small.render(controls, True, (165, 155, 132))
-        self.screen.blit(label, (w - label.get_width() - 20, top + 90))
+        controls_rect = label.get_rect(topleft=(245, top + 104))
+        self.screen.blit(label, controls_rect)
         # Base vitality at right.
-        self.screen.blit(self.small.render("VERDANT KEEP", True, (165, 198, 165)), (w - 210, top + 18))
-        self.screen.blit(self.font.render(f"{max(0, int(self.player_base.health))} / 250", True, CREAM), (w - 210, top + 39))
+        base_rect = pygame.Rect(w - 210, top + 12, 190, 58)
+        self.screen.blit(self.small.render("VERDANT KEEP", True, (165, 198, 165)), (base_rect.x, top + 18))
+        self.screen.blit(self.font.render(f"{max(0, int(self.player_base.health))} / 250", True, CREAM), (base_rect.x, top + 39))
+        self.hud_layout = {
+            "buttons": [button.rect.copy() for button, _ in self.hud_buttons],
+            "army": info_rect,
+            "controls": controls_rect,
+            "base": base_rect,
+            "hud": pygame.Rect(0, top, w, HUD_H),
+        }
+        self.hud_text = {"army": info, "controls": controls}
 
     def draw_menu(self):
         w, h = self.screen.get_size()
@@ -1554,25 +2648,30 @@ class Game:
         speed = 25 * dt * (13 / self.zoom)
         dx = (keys[pygame.K_d] or keys[pygame.K_RIGHT] or mx > w - 5) - (keys[pygame.K_a] or keys[pygame.K_LEFT] or mx < 5)
         dy = (keys[pygame.K_s] or keys[pygame.K_DOWN] or my > h - HUD_H - 5) - (keys[pygame.K_w] or keys[pygame.K_UP] or my < 5)
-        self.camera[0] = clamp(self.camera[0] + dx * speed, 0, MAP_SIZE)
-        self.camera[1] = clamp(self.camera[1] + dy * speed, 0, MAP_SIZE)
+        self.camera[0] += dx * speed
+        self.camera[1] += dy * speed
+        self.clamp_camera()
 
     def handle_game_event(self, event):
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_1: self.select_kind("swordsman")
-            elif event.key == pygame.K_2: self.select_kind("archer")
-            elif event.key == pygame.K_3: self.select_kind()
-            elif event.key == pygame.K_s: self.recruit("swordsman")
-            elif event.key == pygame.K_a: self.recruit("archer")
-            elif event.key == pygame.K_SPACE: self.camera[:] = [self.player_base.x, self.player_base.y]
+            if event.key in SELECTION_SHORTCUTS:
+                self.select_kind(SELECTION_SHORTCUTS[event.key])
+            elif event.key in RECRUIT_SHORTCUTS:
+                self.recruit(RECRUIT_SHORTCUTS[event.key])
+            elif event.key == pygame.K_SPACE:
+                self.camera[:] = [self.player_base.x, self.player_base.y]
+                self.clamp_camera()
             elif event.key == pygame.K_r and self.winner: self.reset()
             elif event.key == pygame.K_ESCAPE:
                 self.state = "menu" if self.winner else "paused"
         elif event.type == pygame.MOUSEWHEEL:
             old_world = self.screen_to_world(pygame.mouse.get_pos())
-            self.zoom = clamp(self.zoom * (1.13 ** event.y), 5, 30)
+            w, h = self.screen.get_size()
+            fit_zoom = max(w / MAP_SIZE, (h - HUD_H) / MAP_SIZE)
+            self.zoom = clamp(self.zoom * (1.13 ** event.y), fit_zoom, 30)
             new_world = self.screen_to_world(pygame.mouse.get_pos())
             self.camera[0] += old_world[0] - new_world[0]; self.camera[1] += old_world[1] - new_world[1]
+            self.clamp_camera()
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 for button, kind in getattr(self, "hud_buttons", []):
@@ -1592,7 +2691,14 @@ class Game:
                 world = self.screen_to_world(event.pos)
                 friends = [u for u in self.units if u.team == "green"]
                 hit = min(friends, key=lambda u: dist((u.x, u.y), world), default=None)
-                if hit and dist((hit.x, hit.y), world) < .9: hit.selected = True
+                hit_radius = .9
+                if hit:
+                    hit_radius *= (
+                        UNIT_RENDER_SCALES[hit.kind]
+                        / UNIT_RENDER_SCALES["swordsman"]
+                    )
+                if hit and dist((hit.x, hit.y), world) < hit_radius:
+                    hit.selected = True
             else:
                 for u in self.units:
                     if u.team == "green" and rect.collidepoint(self.world_to_screen(u.x, u.y)): u.selected = True

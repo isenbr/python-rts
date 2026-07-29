@@ -1,0 +1,35 @@
+Work in /work on the python-rts project. Do not commit changes.
+
+  Implement a clear, deterministic “last-seen player army” snapshot in main.py’s EnemyAI.
+
+  Requirements:
+  - Reuse the existing fog-safe observation system in EnemyAI._update_strategic_knowledge().
+  - The AI must never inspect hidden player units directly.
+  - Store the most recently observed player squad/army as snapshots containing at least:
+    - uid
+    - unit kind
+    - last observed health
+    - observation time
+  - Update a unit’s snapshot when it is actually visible to a red unit or the enemy keep.
+  - Remove a unit from the snapshot when the AI visibly confirms that it died.
+  - Do not erase the last-seen army merely because the ordinary PLAYER_KNOWLEDGE_TTL expires. The attack-
+  launch rule in a later step must be able to compare against the player squad that was last seen.
+  - Keep short-lived tactical observations separate from this persistent strategic snapshot so existing
+  combat retreat behavior can still distinguish fresh and stale information.
+  - Add a helper that returns the last-seen player composition both as unit counts and essence totals
+  using UNIT_COSTS.
+  - Preserve deterministic ordering.
+
+  Add tests covering:
+  1. Hidden distant player units never enter the snapshot.
+  2. Visible player units enter it with the correct kind, health, and timestamp.
+  3. A visible update replaces health/position facts as appropriate.
+  4. A visibly confirmed death removes the unit.
+  5. Losing vision does not immediately erase the last-seen snapshot.
+  6. Essence totals use UNIT_COSTS, not unit counts.
+
+  Checks:
+  - Run the focused observation/knowledge tests.
+  - Run: python3 -m unittest discover -s tests
+  - Fix all regressions before stopping.
+  - Briefly report the data model added and the exact test results.

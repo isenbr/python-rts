@@ -1,0 +1,43 @@
+Reduce Verdant Crown's battlefield from 200 x 200 tiles to 120 x 120 tiles while preserving the
+game's overall left-to-right layout and playability.
+
+Use `MAP_SIZE = 120`. Reposition bases, starting armies, camera start, road generation, terrain quiet
+zones, rally points, formations, defense zones, and any other spatial setup relative to the new map.
+Preserve the approximate proportions of the old layout: the player starts near the left side, the enemy
+near the right side, and both are centered vertically. Replace any remaining literal 199.5 or loops/ranges
+derived from the old 200-tile size with shared bounds or map-relative calculations.
+
+Review AI distances and timing in the context of the shorter battlefield. Tune only spatial or timing
+constants that demonstrably cause broken behavior such as immediate base detection, overlapping setup,
+waves that never form, or excessive travel delay. Do not change unit statistics, costs, income, combat
+damage, fog vision radii, or production scoring merely to rebalance the smaller map.
+
+Update README text that describes the battlefield size.
+
+Add tests covering:
+
+- The map is exactly 120 x 120
+- Bases, initial units, recruitment spawns, rally points, formation points, tactical destinations, move
+  orders, and roads are inside the new bounds
+- Movement clamps to 0.5 through `MAP_SIZE - 0.5` on both axes
+- Camera clamping and recentering work across the entire smaller map
+- Fog visibility/exploration does not create out-of-bounds tiles
+- Starting armies do not overlap their bases or one another
+- Enemy defense does not trigger solely because the map is smaller
+- At least two attack waves remain possible in deterministic simulation
+
+After implementation:
+
+1. Run the focused map/bounds tests.
+2. Run the complete automated test suite.
+3. Run a syntax/compilation check.
+4. Run fixed-seed headless simulations and compare first-wave timing and state transitions with the
+   previous baseline.
+5. Manually pan to all four edges, zoom in and out, issue edge-bound move orders, recruit every unit,
+   and observe at least one attack wave.
+6. Take screenshots of the player start, enemy start, and map edges only under `/work/screenshots`.
+   Immediately inspect each screenshot with `view_image`; report and fix verified void areas, clipping,
+   invalid fog, misplaced roads, overlapping units, or camera problems.
+7. Report exact test results, coordinates chosen, any constants tuned, and remaining balance concerns.
+
+Do not change the requested unit values or archer firing behavior in this step. Do not commit changes.

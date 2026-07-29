@@ -1,0 +1,52 @@
+ Work in /work on the python-rts project. Continue from the essence-balanced production implementation.
+  Do not commit changes.
+
+  Change EnemyAI production targets after it has observed the player army.
+
+  Use this explicit counter mapping:
+  - player swordsmen -> enemy archers
+  - player archers -> enemy shields
+  - player shields -> enemy swordsmen
+
+  Requirements:
+  - Calculate the player composition by observed essence value:
+    player contribution = UNIT_COSTS[kind] for each last-seen living unit.
+  - Map those essence contributions through the counter table to produce the AI’s desired production
+  essence shares.
+  - Example: if 50% of the last-seen player army’s essence is archers and 50% is shields, the AI target
+  must be approximately:
+    - 50% shields, countering the archers
+    - 50% swordsmen, countering the shields
+    - 0% archers
+  - Compare the desired shares with essence already invested in the AI army and purchase the unit with
+  the greatest target deficit.
+  - Base the correction on essence, not unit counts or raw utility-score bonuses.
+  - Keep choices deterministic and account for the projected cost of the next unit.
+  - Avoid rapid oscillation when targets are nearly equal by using a small documented tolerance or
+  deterministic projected-error calculation.
+  - When a newly observed army changes composition, production should redirect toward the new deficits.
+  - When no army has ever been observed, retain the equal-essence baseline from the previous step.
+  - Defense-only overrides may remain, but normal BUILDING/RALLYING production must follow these targets.
+  - Update README.md’s enemy-production documentation so it describes the new essence-share algorithm
+  instead of the old score constants.
+
+  Add tests covering:
+  1. A player army with equal unit counts but unequal costs produces cost-weighted, not count-weighted,
+  targets.
+  2. The 50%-archer / 50%-shield essence example produces approximately 50% shields and 50% swordsmen by
+  AI spending.
+  3. A swordsman-heavy player army redirects production toward archers.
+  4. An archer-heavy player army redirects production toward shields.
+  5. A shield-heavy player army redirects production toward swordsmen.
+  6. A changed sighting changes subsequent production without inspecting hidden units.
+  7. Long production sequences converge within a documented rounding tolerance of the desired essence
+  shares.
+  8. Unaffordable preferred counters cause saving unless an emergency override applies.
+
+  Checks:
+  - Run the focused production and strategic-knowledge tests.
+  - Run the deterministic AI simulation and inspect its reported spending by unit kind.
+  - Run: python3 -m unittest discover -s tests
+  - Fix every regression before stopping.
+  - Briefly report target versus actual essence shares for representative scenarios and the exact test
+  results.

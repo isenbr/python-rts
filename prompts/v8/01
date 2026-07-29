@@ -1,0 +1,31 @@
+Inspect the current Verdant Crown project and map the enemy AI systems that will be changed in later
+steps without changing gameplay yet.
+
+Identify and document where the enemy AI:
+
+- Chooses which unit types to recruit
+- Observes, remembers, or estimates the player's unit composition
+- Forms and controls combat groups
+- Decides to attack, retreat, recover, or regroup
+- Responds to casualties
+- Updates decisions when visibility or intelligence changes
+
+Trace the relevant files, classes, state, configuration values, and decision flow. Determine which
+information is legitimately available to the enemy AI and identify any risk that future strength or
+composition logic could read hidden player state.
+
+Before editing, run the existing automated tests and syntax/compilation checks to establish a baseline.
+Add characterization tests only where needed to lock down the current production, combat-group, and
+retreat behavior that later prompts will intentionally change. Do not implement smarter tactical
+behavior, change unit balance, or alter visuals in this step.
+
+After inspection:
+
+1. Report the exact baseline test and compilation results.
+2. List the relevant code paths and current decision precedence.
+3. Propose the smallest coherent implementation plan for the remaining prompts.
+4. Identify existing tests that can be extended and any missing test seams.
+5. If any screenshot is taken, save it only under `/work/screenshots`, inspect it immediately with
+   `view_image`, and report every visual problem.
+
+Do not commit changes.

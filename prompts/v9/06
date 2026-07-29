@@ -1,0 +1,38 @@
+Work in /work on the completed enemy-AI changes. Do not commit changes.
+
+  Perform an integration review of:
+  - persistent fog-safe player-army memory,
+  - equal-essence default production,
+  - cost-weighted counter production,
+  - last-seen-squad attack gating,
+  - shield/sword/archer three-rank formations.
+
+  Do not add unrelated features.
+
+  Create or extend a deterministic simulation that exercises at least these scenarios:
+  1. No player information: AI spending trends toward one third per unit kind by essence.
+  2. Last-seen player army is 50% archer essence and 50% shield essence: AI spending trends toward 50%
+  shields and 50% swordsmen.
+  3. Player composition changes after a new sighting: production target changes accordingly.
+  4. AI rally squad is weaker than the last-seen player squad: launch is held.
+  5. Continued counter production makes the AI stronger: launch becomes permitted.
+  6. During rally and advance, shields remain in front, swords in the middle, and archers in back.
+
+  Make the simulation output deterministic and include:
+  - observed player essence shares,
+  - desired AI counter shares,
+  - actual AI spending shares,
+  - launch-gate strength ratio and decision,
+  - wave composition,
+  - formation rank ordering.
+
+  Checks:
+  - Inspect the diff for accidental unrelated changes.
+  - Run the deterministic simulation at least twice and verify identical output.
+  - Run: python3 -m unittest discover -s tests
+  - Run any repository-specific validation documented in README.md.
+  - If a screenshot is taken, save it only under /work/screenshots, immediately inspect it with
+  view_image using its absolute path, and report all visual problems.
+  - Do not stop with failing tests.
+  - Finish with a concise summary of behavior, balance tolerances, files changed, and exact command
+  results.

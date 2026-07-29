@@ -1,0 +1,39 @@
+ 1. Improve pacing and balance. The first enemy wave launches at 2.5 seconds, before the player can
+     meaningfully prepare. In idle simulations, every seed produced defeat around 176 seconds. Add an
+     opening grace period, then scale wave size and production over time.
+
+  2. Add a minimap. The 120×120 battlefield is much larger than the viewport, while unexplored space is
+     nearly black. A minimap showing explored terrain, friendly units, the camera rectangle, and visible
+     threats would solve the largest usability problem.
+
+  3. Make battles easier to read. Add persistent health bars for damaged units, move/attack destination
+     markers, selection-type details, clearer projectile impacts, and warning cues when the keep is
+     attacked.
+
+  4. Expand strategic variety. The simulator produced identical results for seeds 1, 7, and 23.
+     Difficulty profiles or AI personalities could vary attack timing, preferred composition, aggression,
+     and defensive reserve size.
+
+  5. Revisit unit composition. The idle AI produced 17 swordsmen, 2 shields, and no new archers. That
+     suggests the production scoring strongly converges on swordsmen. Run broader balance simulations and
+     expose summary metrics such as damage by unit type, survival time, and essence efficiency.
+
+  6. Add explicit attack-move and stop commands. Right-click currently combines movement and attacking.
+     Separate move, attack-move, focus-attack, and stop/hold behavior would make player control more
+     predictable.
+
+  7. Improve onboarding. The menu’s large panel is mostly empty. Use it for compact unit roles, core
+     controls, difficulty selection, or a short tutorial scenario. Tooltips on recruitment cards could
+     explain health, damage, speed, and tactical role.
+
+  8. Add progression and objectives. The current match is purely “destroy the other keep.” Resource
+     nodes, control points, unit upgrades, defensive structures, or secondary objectives would create
+     decisions beyond accumulating units.
+
+  9. Strengthen responsive layout. The window is resizable, but HUD cards use fixed pixel coordinates. A
+     narrow window will eventually overlap or clip controls. Calculate card widths and positions from the
+     current window size.
+
+  10. Split the single 1,900-line module. Separate simulation/model, enemy AI, rendering, interface, and
+     input handling. This would make new modes and content much safer to implement without disturbing
+     combat logic.

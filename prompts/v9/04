@@ -1,0 +1,45 @@
+Work in /work on the python-rts project. Continue from the counter-production implementation. Do not
+  commit changes.
+
+  Change the enemy AI so it does not launch a new attacking squad until that squad is predicted to beat
+  the player squad that was last seen.
+
+  Requirements:
+  - Reuse CombatStrengthEvaluator rather than creating an unrelated unit-count comparison.
+  - Compare the complete proposed red attacking squad against the persistent last-seen player squad
+  snapshot.
+  - Use last-observed unit kind and health; do not read current hidden player state.
+  - Require a documented safety margin. Prefer the existing STRONGER_RATIO / CombatAdvantage.STRONGER
+  semantics unless a separate launch margin is clearly necessary.
+  - If no player squad has ever been seen, preserve a reasonable bootstrap rule such as the existing
+  minimum squad strength plus formation readiness.
+  - If a player squad has been seen, MAX_RALLY_WAIT must not bypass the strength gate. A timeout may
+  relax formation positioning, but it must not launch a squad predicted to lose.
+  - The AI should remain in BUILDING or RALLYING and continue producing counters until the comparison
+  passes.
+  - Recalculate when:
+    - the attacking squad changes,
+    - health changes,
+    - production adds units, or
+    - the player army is observed again.
+  - Keep the existing in-combat retreat/re-engage behavior working.
+  - Record launch-gate diagnostics in wave history or another inspectable field: own strength, opponent
+  strength, ratio, and decision.
+
+  Add tests covering:
+  1. An underpowered formed squad does not launch against a stronger last-seen squad.
+  2. MAX_RALLY_WAIT cannot force an underpowered launch.
+  3. Adding suitable counter units eventually allows launch.
+  4. A squad launches once it satisfies the strength margin and formation/timeout condition.
+  5. Hidden changes to the real player army do not affect the gate until observed.
+  6. A newly observed stronger player squad immediately changes the gate.
+  7. No-observation startup still launches under the documented bootstrap behavior.
+  8. Existing attack retreat and recovery tests remain valid.
+
+  Checks:
+  - Run EnemySquadTests and CombatStrengthEvaluator tests.
+  - Run the combat-state transition tests.
+  - Run the deterministic simulation and verify at least one held launch and one permitted launch.
+  - Run: python3 -m unittest discover -s tests
+  - Fix all failures before stopping.
+  - Briefly report the launch margin, bootstrap behavior, and exact test results.

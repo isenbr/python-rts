@@ -1,0 +1,48 @@
+Work in /work on the python-rts project. Continue from the strength-gated launch implementation. Do not
+  commit changes.
+
+  Change enemy squad formation to use three ordered ranks:
+
+  1. Shields in front.
+  2. Swordsmen in the middle.
+  3. Archers in the rear.
+
+  Requirements:
+  - Replace the current two-role frontline/rear model with explicit, clearly named formation roles for
+  all three unit kinds.
+  - Formation position must be relative to the direction from the enemy base toward the player base, not
+  hard-coded to one screen axis.
+  - Use separate forward offsets so shields are always ahead of swordsmen and swordsmen are always ahead
+  of archers.
+  - Center each rank laterally and preserve deterministic ordering by uid.
+  - Handle missing ranks cleanly. For example, swords should still be ahead of archers when no shields
+  exist.
+  - Update rally positioning, formation readiness, wave advancement, cohesion behavior, recovery cleanup,
+  and defense transitions wherever they assume only “frontline” and “rear.”
+  - While advancing, preserve rank ordering when units are not actively responding to local combat.
+  - Local targeting and collision separation may temporarily disturb formation, but idle movement should
+  restore the three-rank order.
+  - Keep all destinations within world bounds.
+  - Do not change green/player unit controls.
+
+  Add tests covering:
+  1. Shield destination is ahead of swordsman destination.
+  2. Swordsman destination is ahead of archer destination.
+  3. The ordering works for horizontal and non-horizontal advance directions.
+  4. Each rank is laterally centered.
+  5. Missing unit kinds do not break formation or readiness.
+  6. Formation destinations remain inside the map.
+  7. The formation remains ordered while advancing over several updates.
+  8. Cleanup removes roles for dead or removed squad members.
+  9. Recovery and defense transitions do not leave invalid formation roles.
+  10. Existing wave cohesion and successive-wave tests still pass.
+
+  Checks:
+  - Run the focused formation and squad tests.
+  - Run the combat-state transition tests.
+  - Run: python3 -m unittest discover -s tests
+  - Launch the game for a short manual smoke test if the environment supports it. If a screenshot is
+  taken, save it only under /work/screenshots, immediately inspect it with view_image using its absolute
+  path, and report every visible formation or rendering problem.
+  - Fix all automated-test failures and any reproducible formation problems before stopping.
+  - Briefly report the rank offsets, manual observations, and exact test results.

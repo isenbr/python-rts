@@ -1,0 +1,37 @@
+Integrate the combat-strength evaluator into the enemy AI's retreat and regroup decisions.
+
+An enemy AI group should retreat when it is meaningfully weaker than its current opponent. Continue
+reassessing relative strength while the group is attacking, retreating, and regrouping so fresh
+observations can reverse an earlier decision. Casualties, damage, newly seen opponents, lost vision,
+and reinforcements must all be able to trigger another judgment. Do not permanently latch a retreat or
+attack decision.
+
+Prevent rapid attack-retreat oscillation with named, configurable margins, hysteresis, and a minimum
+decision interval where appropriate. A large or urgent change in observed strength should still be
+able to force timely reconsideration. Treat uncertain or stale intelligence conservatively and
+document the exact fallback behavior. Preserve existing pathfinding, safe retreat destinations,
+formation behavior, and regroup mechanics.
+
+Add deterministic tests covering:
+
+- A weaker group deciding to retreat
+- A stronger group deciding to attack or remain engaged
+- An evenly matched or uncertain situation
+- A retreating group receiving reinforcements and re-engaging
+- An attacking group discovering reinforcements for the opponent and retreating
+- Casualties changing the decision in either direction
+- Lost vision and stale intelligence
+- Hysteresis preventing oscillation near a threshold
+- Periodic reassessment when no explicit observation event fires
+
+After implementation:
+
+1. Run the focused state-transition tests and the complete automated test suite.
+2. Run the project's syntax/compilation checks.
+3. Run fixed-seed headless scenarios that exercise retreat, regroup, and re-engagement.
+4. Report the resulting decision precedence, thresholds, and state transitions.
+5. If any screenshot is taken, save it only under `/work/screenshots`, inspect it immediately with
+   `view_image`, and report every visual problem.
+
+Do not yet allow strength to override the existing casualty-triggered retreat mechanic. Do not commit
+changes.
