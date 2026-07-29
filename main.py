@@ -159,9 +159,74 @@ ENEMY_STARTING_UNITS = (
     ("swordsman", -5, 2),
     ("archer", -6.5, 0),
 )
+LEVEL_ONE_ENEMY_STARTING_UNITS = (
+    ("swordsman", -4, -4.5),
+    ("swordsman", -4, -3.5),
+    ("swordsman", -4, -2.5),
+    ("swordsman", -4, -1.5),
+    ("swordsman", -4, -.5),
+    ("swordsman", -4, .5),
+    ("swordsman", -4, 1.5),
+    ("swordsman", -4, 2.5),
+    ("swordsman", -4, 3.5),
+    ("swordsman", -4, 4.5),
+    ("archer", -5.5, -1.5),
+    ("archer", -5.5, 1.5),
+)
 ROAD_START_X = round(MAP_SIZE * .025)
 ROAD_END_X = MAP_SIZE - ROAD_START_X
 ROAD_WAVE_LENGTH = MAP_SIZE * .085
+
+
+@dataclass(frozen=True)
+class LevelConfig:
+    number: int
+    name: str
+    map_size: int
+    description: str
+    player_units: tuple[str, ...]
+    player_starting_units: tuple[tuple[str, float, float], ...]
+    enemy_starting_units: tuple[tuple[str, float, float], ...]
+    enemy_ai: str
+    starting_essence: float
+    enemy_starting_essence: float
+
+
+LEVELS = {
+    1: LevelConfig(
+        1, "THE FIRST MARCH", 20,
+        "Face ten swordsmen and two archers. Recruit swordsmen only.",
+        ("swordsman",), (), LEVEL_ONE_ENEMY_STARTING_UNITS,
+        "none", 2000.0, 0.0,
+    ),
+    2: LevelConfig(
+        2, "THE LONG ROAD", 60,
+        "Swordsmen and archers. The enemy sends one swordsman at 200 gold.",
+        ("swordsman", "archer"), (), (), "simple", 400.0, 0.0,
+    ),
+    3: LevelConfig(
+        3, "THE VERDANT WAR", 120,
+        "The complete battle with every troop and the adaptive enemy army.",
+        UNIT_KINDS, PLAYER_STARTING_UNITS, ENEMY_STARTING_UNITS,
+        "full", 400.0, 500.0,
+    ),
+}
+
+
+def configure_map(size):
+    """Update the shared world geometry before constructing a level."""
+    global MAP_SIZE, MAP_CENTER, WORLD_MAX
+    global GREEN_KING_POSITION, RED_KING_POSITION, CAMERA_START
+    global ROAD_START_X, ROAD_END_X, ROAD_WAVE_LENGTH
+    MAP_SIZE = size
+    MAP_CENTER = MAP_SIZE / 2
+    WORLD_MAX = MAP_SIZE - .5
+    GREEN_KING_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
+    RED_KING_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
+    CAMERA_START = (GREEN_KING_POSITION[0] + 2.5, MAP_CENTER + .5)
+    ROAD_START_X = max(0, round(MAP_SIZE * .025))
+    ROAD_END_X = MAP_SIZE - ROAD_START_X
+    ROAD_WAVE_LENGTH = MAP_SIZE * .085
 
 
 def clamp(value, low, high):
@@ -2275,15 +2340,22 @@ class Game:
         self.button_cost_font = pygame.font.Font(None, 18)
         self.state = "menu"
         self.play_btn = Button((WIDTH // 2 - 100, HEIGHT // 2 + 85, 200, 62), "Play!")
+        self.level_buttons = []
+        self.level_number = 3
+        self.level = LEVELS[self.level_number]
         self.enemy_rng = enemy_rng
         self.ai_decision_interval = ai_decision_interval
         self.reset()
 
-    def reset(self):
+    def reset(self, level_number=None):
+        if level_number is not None:
+            self.level_number = level_number
+        self.level = LEVELS[self.level_number]
+        configure_map(self.level.map_size)
         self.units: list[Unit] = []
         self.unit_spatial_hash = UnitSpatialHash()
-        self.essence = 400.0
-        self.enemy_essence = 500.0
+        self.essence = self.level.starting_essence
+        self.enemy_essence = self.level.enemy_starting_essence
         self.uid = 0
         self.navigation_time = 0.0
         self.path_calculation_count = 0
@@ -2303,7 +2375,7 @@ class Game:
                 guard = self.add_unit("knight", king.team, *guard_post)
                 guard.home_position = guard_post
         self.camera = list(CAMERA_START)
-        self.zoom = 13.0
+        self.zoom = 30.0 if self.level_number == 1 else 13.0
         self.clamp_camera()
         self.explored = set()
         self.visible = set()
@@ -2315,16 +2387,28 @@ class Game:
         self.arrows = []
         self.particles = []
         self.king_slashes: list[SlashEffect] = []
-        self.message = "Defeat the Crimson King"
+        self.message = (
+            "Defeat all enemy units"
+            if self.level_number == 1
+            else "Defeat the Crimson King"
+        )
         self.message_time = 4
         self.winner = None
         self.essence_tick = 0
         self.reveal_tick = 0
         self.terrain = self.make_terrain()
-        for kind, dx, dy in PLAYER_STARTING_UNITS:
+        for kind, dx, dy in self.level.player_starting_units:
             self.add_unit(kind, "green", *offset_from(GREEN_KING_POSITION, (dx, dy)))
-        for kind, dx, dy in ENEMY_STARTING_UNITS:
+        for kind, dx, dy in self.level.enemy_starting_units:
             self.add_unit(kind, "red", *offset_from(RED_KING_POSITION, (dx, dy)))
+        if self.level_number == 1:
+            self.units[:] = [
+                unit for unit in self.units
+                if not (
+                    unit.team == "red"
+                    and (unit.is_king_objective or unit.is_autonomous_guard)
+                )
+            ]
         self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
         self._movement_snapshot_active = False
         self.rebuild_unit_spatial_hash()
@@ -2452,12 +2536,13 @@ class Game:
                     rng.uniform(.2, .8),
                     rng.uniform(-.35, .35),
                 )
-        for x in range(ROAD_START_X, ROAD_END_X):
-            y = int(MAP_CENTER + math.sin(x / ROAD_WAVE_LENGTH) * 2)
-            terrain[(x, y)] = "road"
-            terrain[(x, y + 1)] = "road"
-            self.terrain_details.pop((x, y), None)
-            self.terrain_details.pop((x, y + 1), None)
+        if self.level_number != 1:
+            for x in range(ROAD_START_X, ROAD_END_X):
+                y = int(MAP_CENTER + math.sin(x / ROAD_WAVE_LENGTH) * 2)
+                terrain[(x, y)] = "road"
+                terrain[(x, y + 1)] = "road"
+                self.terrain_details.pop((x, y), None)
+                self.terrain_details.pop((x, y + 1), None)
         return terrain
 
     def add_unit(self, kind, team, x, y):
@@ -2497,11 +2582,15 @@ class Game:
             return False
         if kind not in ALL_UNIT_KINDS:
             raise ValueError(f"Invalid unit kind: {kind!r}")
+        if team == "green" and kind not in self.level.player_units:
+            return False
+        if team == "red" and self.level.enemy_ai == "none":
+            return False
         cost = UNIT_COSTS[kind]
         wallet = self.essence if team == "green" else self.enemy_essence
         if wallet < cost:
             if team == "green":
-                self.message, self.message_time = "Not enough essence", 1.5
+                self.message, self.message_time = "Not enough gold", 1.5
             return False
         if team == "green":
             self.essence -= cost
@@ -2573,6 +2662,17 @@ class Game:
     def update_visibility(self):
         previous_visible = self.visible.copy()
         previous_explored_count = len(self.explored)
+        if self.level_number == 1:
+            self.visible = {
+                (x, y) for x in range(MAP_SIZE) for y in range(MAP_SIZE)
+            }
+            self.explored = self.visible.copy()
+            if (
+                self.visible != previous_visible
+                or len(self.explored) != previous_explored_count
+            ):
+                self._fog_revision += 1
+            return
         self.visible.clear()
         green_king = self.team_king("green")
         sources = (
@@ -3145,21 +3245,6 @@ class Game:
                 u.target_pos = None
             self.clear_navigation(u)
         if u.is_king_objective or u.is_autonomous_guard:
-            previous_target = target
-            away_from_post = dist((u.x, u.y), u.home_position) > 1e-9
-            if away_from_post and not self.is_valid_guard_target(
-                u, previous_target
-            ):
-                u.target = None
-                u.target_pos = u.home_position
-                if dist((u.x, u.y), u.home_position) < .08:
-                    u.x, u.y = u.home_position
-                    u.target_pos = None
-                else:
-                    self.navigate_unit_toward(u, u.home_position, dt)
-                    if (u.x, u.y) == u.home_position:
-                        u.target_pos = None
-                return
             target = self.autonomous_guard_target(u)
             u.target = target
             if target is None:
@@ -3237,7 +3322,10 @@ class Game:
         self.navigation_time += max(0.0, dt)
         self.essence += 20 * dt
         self.enemy_essence += 20 * dt
-        self.enemy_ai.update(dt)
+        if self.level.enemy_ai == "full":
+            self.enemy_ai.update(dt)
+        elif self.level.enemy_ai == "simple":
+            self.update_simple_enemy_ai()
         # One deterministic snapshot per simulation update. Movement still uses
         # the same pre-movement positions, avoiding list-order feedback.
         self.rebuild_unit_spatial_hash()
@@ -3260,7 +3348,13 @@ class Game:
         # alive while destroying the Crimson King.
         if dead_green_king:
             self.winner = "DEFEAT"
-        elif dead_red_king:
+        elif dead_red_king or (
+            self.level_number == 1
+            and not any(
+                unit.team == "red" and unit.health > 0
+                for unit in self.units
+            )
+        ):
             self.winner = "VICTORY"
         for unit in self.units:
             if unit.team == "green" and unit.health <= 0:
@@ -3290,6 +3384,17 @@ class Game:
         if self.reveal_tick <= 0:
             self.update_visibility()
             self.reveal_tick = .12
+
+    def update_simple_enemy_ai(self):
+        """Spend each complete 200-essence tranche on an immediate attacker."""
+        while self.enemy_essence >= UNIT_COSTS["swordsman"]:
+            if not self.recruit("swordsman", "red"):
+                break
+            attacker = self.units[-1]
+            objective = self.team_king("green")
+            if objective is not None:
+                attacker.target = objective
+                attacker.target_pos = (objective.x, objective.y)
 
     def draw_terrain(self):
         w, h = self.screen.get_size()
@@ -3567,6 +3672,8 @@ class Game:
             )
 
     def draw_fog(self):
+        if self.level_number == 1:
+            return
         w, h = self.screen.get_size(); view_h = h - HUD_H
         left, top = self.screen_to_world((0, 0)); right, bottom = self.screen_to_world((w, view_h))
         x0, x1 = math.floor(left) - 2, math.ceil(right) + 3
@@ -3607,46 +3714,33 @@ class Game:
         w, h = self.screen.get_size(); top = h - HUD_H
         pygame.draw.rect(self.screen, (34, 31, 27), (0, top, w, HUD_H))
         pygame.draw.line(self.screen, (129, 102, 62), (0, top), (w, top), 3)
-        pygame.draw.circle(self.screen, (92, 188, 205), (34, top + 29), 12)
-        self.screen.blit(self.font.render(f"{int(self.essence):,} essence", True, CREAM), (55, top + 18))
-        self.screen.blit(self.small.render("+20 each second", True, (172, 158, 128)), (55, top + 44))
-        sword_cost = UNIT_COSTS["swordsman"]
-        archer_cost = UNIT_COSTS["archer"]
-        shield_cost = UNIT_COSTS["shield"]
-        sword_btn = Button(
-            (245, top + 16, 180, 62),
-            "Raise Swordsman",
-            f"{sword_cost} essence  •  [S]",
+        pygame.draw.rect(
+            self.screen, GOLD, (21, top + 23, 26, 12), border_radius=2
         )
-        archer_btn = Button(
-            (440, top + 16, 180, 62),
-            "Raise Archer",
-            f"{archer_cost} essence  •  [A]",
-            disabled_text=(190, 184, 169),
-            disabled_sub=(168, 160, 145),
+        pygame.draw.rect(
+            self.screen, (255, 225, 122), (23, top + 25, 22, 3),
+            border_radius=1,
         )
-        shield_btn = Button(
-            (635, top + 16, 180, 62),
-            "Raise Shield",
-            f"{shield_cost} essence  •  [Q]",
-        )
-        sword_btn.draw(
-            self.screen, pygame.mouse.get_pos(), self.button_font,
-            self.button_cost_font, self.essence >= sword_cost,
-        )
-        archer_btn.draw(
-            self.screen, pygame.mouse.get_pos(), self.button_font,
-            self.button_cost_font, self.essence >= archer_cost,
-        )
-        shield_btn.draw(
-            self.screen, pygame.mouse.get_pos(), self.button_font,
-            self.button_cost_font, self.essence >= shield_cost,
-        )
-        self.hud_buttons = [
-            (sword_btn, "swordsman"),
-            (archer_btn, "archer"),
-            (shield_btn, "shield"),
-        ]
+        self.screen.blit(self.font.render(f"{int(self.essence):,} gold", True, CREAM), (55, top + 18))
+        self.screen.blit(self.small.render("+20 gold each second", True, (172, 158, 128)), (55, top + 44))
+        labels = {
+            "swordsman": "Hire Swordsman",
+            "archer": "Hire Archer",
+            "shield": "Hire Shield",
+        }
+        self.hud_buttons = []
+        for index, kind in enumerate(self.level.player_units):
+            cost = UNIT_COSTS[kind]
+            text = labels[kind]
+            button = Button(
+                (245 + index * 195, top + 16, 180, 62), text,
+                f"{cost} gold",
+            )
+            button.draw(
+                self.screen, pygame.mouse.get_pos(), self.button_font,
+                self.button_cost_font, self.essence >= cost,
+            )
+            self.hud_buttons.append((button, kind))
         counts = {
             kind: sum(u.team == "green" and u.kind == kind for u in self.units)
             for kind in UNIT_KINDS
@@ -3654,21 +3748,29 @@ class Game:
         selected = sum(
             u.selected and u.is_player_commandable for u in self.units
         )
-        sword_label = "sword" if counts["swordsman"] == 1 else "swords"
-        archer_label = "archer" if counts["archer"] == 1 else "archers"
-        shield_label = "shield" if counts["shield"] == 1 else "shields"
-        info = (
-            f"Army: {counts['swordsman']} {sword_label}"
-            f"  •  {counts['archer']} {archer_label}"
-            f"  •  {counts['shield']} {shield_label}  •  {selected} selected"
-        )
+        count_labels = {
+            "swordsman": ("sword", "swords"),
+            "archer": ("archer", "archers"),
+            "shield": ("shield", "shields"),
+        }
+        army_parts = []
+        for kind in self.level.player_units:
+            singular, plural = count_labels[kind]
+            army_parts.append(
+                f"{counts[kind]} {singular if counts[kind] == 1 else plural}"
+            )
+        info = f"Army: {'  •  '.join(army_parts)}  •  {selected} selected"
         info_label = self.small.render(info, True, (190, 180, 153))
         info_rect = info_label.get_rect(topleft=(245, top + 84))
         self.screen.blit(info_label, info_rect)
-        controls = (
-            "[1] Swords   [2] Archers   [4] Shields   [3] All army"
-            "   •   Right-click: order"
-        )
+        selection_hints = {
+            "swordsman": "[1] Swords",
+            "archer": "[2] Archers",
+            "shield": "[4] Shields",
+        }
+        controls = "   ".join(
+            selection_hints[kind] for kind in self.level.player_units
+        ) + "   [3] All army   •   Right-click: order"
         label = self.small.render(controls, True, (165, 155, 132))
         controls_rect = label.get_rect(topleft=(245, top + 104))
         self.screen.blit(label, controls_rect)
@@ -3724,12 +3826,78 @@ class Game:
         self.screen.blit(title, (w // 2 - title.get_width() // 2, 155))
         sub = self.title.render("A MEDIEVAL RTS", True, GOLD)
         self.screen.blit(sub, (w // 2 - sub.get_width() // 2, 225))
-        lore = self.font.render("Raise your banners. Break the Crimson King.", True, (191, 181, 152))
+        lore = self.font.render(
+            "Hire an army to defeat the Crimson King.",
+            True,
+            (191, 181, 152),
+        )
         self.screen.blit(lore, (w // 2 - lore.get_width() // 2, 294))
         self.play_btn.rect.center = (w // 2, h // 2 + 110)
         self.play_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font)
         hint = self.small.render("Mouse + keyboard  •  Press Play to begin", True, (200, 190, 160))
         self.screen.blit(hint, (w // 2 - hint.get_width() // 2, h - 80))
+
+    def draw_level_select(self):
+        w, h = self.screen.get_size()
+        self.screen.fill((24, 37, 28))
+        heading = self.title.render("CHOOSE YOUR CAMPAIGN", True, CREAM)
+        self.screen.blit(heading, heading.get_rect(center=(w // 2, 82)))
+        sub = self.small.render(
+            "Three battles. One crown. Select a level to march.",
+            True, (190, 180, 153),
+        )
+        self.screen.blit(sub, sub.get_rect(center=(w // 2, 122)))
+        card_w, card_h, gap = 330, 360, 28
+        start_x = w // 2 - (card_w * 3 + gap * 2) // 2
+        self.level_buttons = []
+        for index, config in enumerate(LEVELS.values()):
+            card = pygame.Rect(start_x + index * (card_w + gap), 165, card_w, card_h)
+            hover = card.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(
+                self.screen, (53, 48, 39) if hover else (43, 41, 35),
+                card, border_radius=16,
+            )
+            pygame.draw.rect(
+                self.screen, GOLD if hover else (132, 106, 65),
+                card, 3, border_radius=16,
+            )
+            number = self.big.render(str(config.number), True, GOLD)
+            self.screen.blit(number, number.get_rect(center=(card.centerx, card.y + 70)))
+            name = self.font.render(config.name, True, CREAM)
+            self.screen.blit(name, name.get_rect(center=(card.centerx, card.y + 125)))
+            map_label = self.small.render(
+                f"{config.map_size} × {config.map_size} MAP", True, (142, 190, 149)
+            )
+            self.screen.blit(
+                map_label, map_label.get_rect(center=(card.centerx, card.y + 158))
+            )
+            words = config.description.split()
+            lines, line = [], ""
+            for word in words:
+                candidate = f"{line} {word}".strip()
+                if self.small.size(candidate)[0] > card_w - 48:
+                    lines.append(line)
+                    line = word
+                else:
+                    line = candidate
+            lines.append(line)
+            for line_index, text in enumerate(lines):
+                label = self.small.render(text, True, (190, 180, 153))
+                self.screen.blit(
+                    label,
+                    label.get_rect(center=(card.centerx, card.y + 205 + line_index * 22)),
+                )
+            button = Button(
+                (card.x + 55, card.bottom - 78, card_w - 110, 52),
+                f"Play Level {config.number}",
+            )
+            button.draw(
+                self.screen, pygame.mouse.get_pos(),
+                self.button_font, self.button_cost_font,
+            )
+            self.level_buttons.append((button, config.number))
+        back = self.small.render("Esc to return", True, (190, 180, 153))
+        self.screen.blit(back, back.get_rect(center=(w // 2, h - 58)))
 
     def draw_game(self):
         self.draw_terrain()
@@ -3755,7 +3923,11 @@ class Game:
             label = self.big.render(self.winner, True, color)
             self.screen.blit(label, label.get_rect(center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 25)))
             result = (
-                "The Crimson King has fallen"
+                (
+                    "The enemy army has fallen"
+                    if self.level_number == 1
+                    else "The Crimson King has fallen"
+                )
                 if self.winner == "VICTORY"
                 else "The Verdant King has fallen"
             )
@@ -3800,10 +3972,10 @@ class Game:
         )
 
     def camera_input(self, dt):
-        keys = pygame.key.get_pressed(); mx, my = pygame.mouse.get_pos(); w, h = self.screen.get_size()
+        keys = pygame.key.get_pressed()
         speed = 25 * dt * (13 / self.zoom)
-        dx = (keys[pygame.K_d] or keys[pygame.K_RIGHT] or mx > w - 5) - (keys[pygame.K_a] or keys[pygame.K_LEFT] or mx < 5)
-        dy = (keys[pygame.K_s] or keys[pygame.K_DOWN] or my > h - HUD_H - 5) - (keys[pygame.K_w] or keys[pygame.K_UP] or my < 5)
+        dx = (keys[pygame.K_d] or keys[pygame.K_RIGHT]) - (keys[pygame.K_a] or keys[pygame.K_LEFT])
+        dy = (keys[pygame.K_s] or keys[pygame.K_DOWN]) - (keys[pygame.K_w] or keys[pygame.K_UP])
         self.camera[0] += dx * speed
         self.camera[1] += dy * speed
         self.clamp_camera()
@@ -3811,9 +3983,9 @@ class Game:
     def handle_game_event(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key in SELECTION_SHORTCUTS:
-                self.select_kind(SELECTION_SHORTCUTS[event.key])
-            elif event.key in RECRUIT_SHORTCUTS:
-                self.recruit(RECRUIT_SHORTCUTS[event.key])
+                kind = SELECTION_SHORTCUTS[event.key]
+                if kind is None or kind in self.level.player_units:
+                    self.select_kind(kind)
             elif event.key == pygame.K_SPACE:
                 green_king = self.team_king("green")
                 if green_king is not None:
@@ -3823,6 +3995,8 @@ class Game:
             elif event.key == pygame.K_ESCAPE:
                 self.state = "menu" if self.winner else "paused"
         elif event.type == pygame.MOUSEWHEEL:
+            if self.level_number == 1:
+                return
             old_world = self.screen_to_world(pygame.mouse.get_pos())
             w, h = self.screen.get_size()
             fit_zoom = max(w / MAP_SIZE, (h - HUD_H) / MAP_SIZE)
@@ -3870,9 +4044,25 @@ class Game:
                 if event.type == pygame.QUIT: running = False
                 elif self.state == "menu":
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.play_btn.rect.collidepoint(event.pos):
-                        self.reset(); self.state = "playing"; self.update_visibility()
+                        self.state = "level_select"
                     elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.reset(); self.state = "playing"; self.update_visibility()
+                        self.state = "level_select"
+                elif self.state == "level_select":
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                        self.state = "menu"
+                    elif event.type == pygame.KEYDOWN and event.key in (
+                        pygame.K_1, pygame.K_2, pygame.K_3,
+                    ):
+                        self.reset(event.key - pygame.K_0)
+                        self.state = "playing"
+                        self.update_visibility()
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        for button, number in self.level_buttons:
+                            if button.rect.collidepoint(event.pos):
+                                self.reset(number)
+                                self.state = "playing"
+                                self.update_visibility()
+                                break
                 elif self.state == "paused":
                     if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                         self.state = "playing"
@@ -3883,6 +4073,8 @@ class Game:
                 self.camera_input(dt); self.update(dt); self.draw_game()
             elif self.state == "paused":
                 self.draw_game(); self.draw_pause()
+            elif self.state == "level_select":
+                self.draw_level_select()
             else:
                 self.draw_menu()
             pygame.display.flip()

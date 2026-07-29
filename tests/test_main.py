@@ -258,8 +258,8 @@ class ShieldPlayerFacingTests(GameTestCase):
         self.game.draw_hud()
         button, kind = self.game.hud_buttons[2]
         self.assertEqual(kind, "shield")
-        self.assertEqual(button.text, "Raise Shield")
-        self.assertEqual(button.sub, "300 essence  •  [Q]")
+        self.assertEqual(button.text, "Hire Shield")
+        self.assertEqual(button.sub, "300 gold")
         self.assertTrue(button.enabled)
         before = len(self.game.units)
         self.game.handle_game_event(pygame.event.Event(
@@ -271,13 +271,14 @@ class ShieldPlayerFacingTests(GameTestCase):
         self.game.draw_hud()
         self.assertFalse(self.game.hud_buttons[2][0].enabled)
 
-    def test_q_recruits_shield(self):
+    def test_q_does_not_recruit_shield(self):
         self.game.essence = 300
+        before = list(self.game.units)
         self.game.handle_game_event(
             pygame.event.Event(pygame.KEYDOWN, key=pygame.K_q)
         )
-        self.assertEqual(self.game.units[-1].kind, "shield")
-        self.assertEqual(self.game.essence, 0)
+        self.assertEqual(self.game.units, before)
+        self.assertEqual(self.game.essence, 300)
 
     def test_four_selects_only_friendly_shields(self):
         green_shield = self.game.add_unit("shield", "green", 10, 10)

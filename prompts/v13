@@ -1,0 +1,7 @@
+Create an interface for my python-rts game: Instead of having play! start the level, have it take you
+  to a level selector. Level 1 should be a 30 by 30 map with just an enemy king and knights. The enemy
+  should not be able to spawn troops, and the player should only be able to spawn swordsmen. There
+  should also be a short path to the enemy king. Level 2 should be a 60 by 60 map with the player only
+  able to spawn swordsmen and archers. There should be a path to the enemy king, but the enemy AI should
+  only consist of a bot spawning a swordsman to go attack every time there is 200 essense available.
+  Level 3 should be the current game.

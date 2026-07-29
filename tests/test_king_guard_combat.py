@@ -150,22 +150,35 @@ class KingGuardCombatTests(unittest.TestCase):
             - archer.damage * ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
         )
 
-    def test_guard_returns_after_target_death_then_reacquires_from_post(self):
+    def test_guard_targets_another_enemy_immediately_after_a_kill(self):
         guard = self.add_guard()
         first = self.game.add_unit("swordsman", "red", 22.5, 20)
         self.game.update_unit(guard, 1)
         first.health = 0
-        second = self.game.add_unit("king", "red", 22, 20)
+        second = self.game.add_unit("king", "red", 24, 20)
 
         self.game.update_unit(guard, .5)
-        self.assertIsNone(guard.target)
-        self.game.update_unit(guard, 1)
-        self.assertEqual((guard.x, guard.y), guard.home_position)
-        self.assertIsNone(guard.target)
-
-        self.game.update_unit(guard, 0)
         self.assertIs(guard.target, second)
         self.assertEqual(guard.target_pos, (second.x, second.y))
+        self.assertGreaterEqual(guard.x, 21)
+
+    def test_guard_retargets_if_an_enemy_appears_while_returning_home(self):
+        guard = self.add_guard()
+        escaped = self.game.add_unit("swordsman", "red", 22.5, 20)
+        self.game.update_unit(guard, 1)
+        escaped.x = 20 + GUARD_LEASH_DISTANCE + .01
+
+        self.game.update_unit(guard, .25)
+        self.assertIsNone(guard.target)
+        returning_x = guard.x
+        self.assertLess(returning_x, 21)
+
+        replacement = self.game.add_unit("archer", "red", 23, 20)
+        self.game.update_unit(guard, .25)
+
+        self.assertIs(guard.target, replacement)
+        self.assertEqual(guard.target_pos, (replacement.x, replacement.y))
+        self.assertGreater(guard.x, returning_x)
 
     def test_guard_ignores_player_orders_and_enemy_ai_destinations(self):
         green = self.add_guard("green", 20, 20)
