@@ -1,0 +1,50 @@
+Inspect /work/main.py and the existing tests without changing gameplay yet.
+
+We want every moving army unit—green and red—to avoid excessive overlap while
+still permitting slight overlap during congestion and melee. Units must also
+path around other units rather than becoming permanently blocked.
+
+First:
+
+1. Document the existing movement pipeline:
+   - player move orders and formation offsets;
+   - enemy strategic and tactical destinations;
+   - guards returning to their posts;
+   - chasing and attacking;
+   - archer movement locks;
+   - map-boundary clamping;
+   - the current red-only separation behavior.
+
+2. Add shared, named movement constants for:
+   - unit collision/separation radius;
+   - allowed soft overlap;
+   - neighbor-query radius;
+   - blocked-time threshold;
+   - pathfinding cell size;
+   - waypoint arrival tolerance;
+   - path recalculation interval.
+
+Choose conservative initial values based on the existing 1.15 formation spacing
+and roughly one-tile attack ranges. Do not change behavior yet.
+
+3. Add test helpers that calculate:
+   - pairwise unit separation;
+   - penetration beyond the permitted soft overlap;
+   - whether a unit made progress toward its final destination.
+
+4. Add baseline tests that demonstrate the current problems:
+   - several green units moving through one point overlap excessively;
+   - green and red units can walk through or stack on other units;
+   - a stationary line of units can block a direct route with no detour;
+   - exact-coordinate overlaps do not produce NaN or nondeterministic behavior.
+
+Tests describing missing behavior may initially fail, but all unrelated existing
+tests must still pass.
+
+Checks:
+- Run the complete test suite.
+- Report the existing movement call graph and exactly which new tests fail for
+  the expected reason.
+- Confirm no combat, AI-state, formation, guard, fog, or recruitment behavior
+  was modified.
+- Do not commit changes.

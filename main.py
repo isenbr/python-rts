@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+import heapq
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
@@ -46,6 +47,27 @@ MELEE_UNIT_KINDS = ("swordsman", "shield")
 SWORDSMAN_BASE_SPEED = 1
 SWORDSMAN_ATTACK_RANGE = 1.02
 UNIT_VISION_RADIUS = 8.0
+# Shared movement geometry, steering, and path-cache timing. Units are treated
+# as soft discs: UNIT_SOFT_OVERLAP is intentional visual/physical compression,
+# so separation begins only inside the remaining minimum center distance.
+UNIT_SEPARATION_RADIUS = 1.15
+UNIT_SOFT_OVERLAP = .15
+UNIT_SEPARATION_GAIN = 4.0
+UNIT_MAX_SEPARATION_SPEED_MULTIPLIER = 2.0
+UNIT_TINY_SEPARATION = .02
+UNIT_NEIGHBOR_QUERY_RADIUS = 2.3
+UNIT_PHYSICAL_RADIUS = UNIT_SEPARATION_RADIUS / 2
+UNIT_SPATIAL_HASH_CELL_SIZE = UNIT_NEIGHBOR_QUERY_RADIUS
+UNIT_BLOCKED_TIME_THRESHOLD = .75
+UNIT_PATHFINDING_CELL_SIZE = 1.0
+UNIT_WAYPOINT_ARRIVAL_TOLERANCE = .12
+UNIT_PATH_RECALCULATION_INTERVAL = .5
+UNIT_PATH_CLEAR_HYSTERESIS = .35
+UNIT_SLOT_SETTLE_RADIUS = .12
+# A failed route must have a predictable upper bound.  This is deliberately
+# below a full-map flood while still allowing long routes around ordinary
+# formations.
+UNIT_ASTAR_MAX_EXPANSIONS = 4096
 # Guards may leave their post by at most three tiles.  This deliberately short
 # leash lets them intercept nearby attackers without turning them into roaming
 # army units.
@@ -158,6 +180,88 @@ def offset_from(position, offset):
     return position[0] + offset[0], position[1] + offset[1]
 
 
+class UnitSpatialHash:
+    """Deterministic uniform grid containing every living unit."""
+
+    def __init__(self, cell_size=UNIT_SPATIAL_HASH_CELL_SIZE):
+        if not math.isfinite(cell_size) or cell_size <= 0:
+            raise ValueError("cell_size must be finite and positive")
+        self.cell_size = cell_size
+        self.cells: dict[tuple[int, int], list[Unit]] = {}
+        self.positions: dict[int, tuple[float, float]] = {}
+        self.candidate_checks = 0
+        self.candidate_queries = 0
+        self.maximum_query_candidates = 0
+
+    def _cell(self, x, y):
+        return math.floor(x / self.cell_size), math.floor(y / self.cell_size)
+
+    def rebuild(self, units):
+        """Replace the index with living units, ordered by stable UID."""
+        self.cells.clear()
+        self.positions.clear()
+        self.candidate_checks = 0
+        self.candidate_queries = 0
+        self.maximum_query_candidates = 0
+        for unit in sorted(
+            (unit for unit in units if unit.health > 0),
+            key=lambda unit: unit.uid,
+        ):
+            self.positions[unit.uid] = (unit.x, unit.y)
+            self.cells.setdefault(self._cell(unit.x, unit.y), []).append(unit)
+
+    def neighbors(self, position, radius, exclude=None):
+        """Return living units within radius in UID order."""
+        if not math.isfinite(radius) or radius < 0:
+            raise ValueError("radius must be finite and non-negative")
+        x, y = position
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return []
+        min_cell = self._cell(x - radius, y - radius)
+        max_cell = self._cell(x + radius, y + radius)
+        radius_squared = radius * radius
+        nearby = []
+        query_candidates = 0
+        for cell_x in range(min_cell[0], max_cell[0] + 1):
+            for cell_y in range(min_cell[1], max_cell[1] + 1):
+                for unit in self.cells.get((cell_x, cell_y), ()):
+                    self.candidate_checks += 1
+                    query_candidates += 1
+                    if unit is exclude or unit.health <= 0:
+                        continue
+                    unit_x, unit_y = self.positions[unit.uid]
+                    dx, dy = unit_x - x, unit_y - y
+                    if dx * dx + dy * dy <= radius_squared:
+                        nearby.append(unit)
+        self.candidate_queries += 1
+        self.maximum_query_candidates = max(
+            self.maximum_query_candidates, query_candidates
+        )
+        return sorted(nearby, key=lambda unit: unit.uid)
+
+    def segment_candidates(self, start, end, radius):
+        """Return units in grid cells along a padded segment.
+
+        Exact geometry remains the caller's responsibility.  Sampling at half
+        a cell prevents long corridor checks from degenerating into a scan of
+        every unit while covering every cell the padded segment can touch.
+        """
+        length = dist(start, end)
+        samples = max(1, math.ceil(length / (self.cell_size * .5)))
+        padding = max(1, math.ceil(radius / self.cell_size))
+        candidates = {}
+        for sample in range(samples + 1):
+            amount = sample / samples
+            x = start[0] + (end[0] - start[0]) * amount
+            y = start[1] + (end[1] - start[1]) * amount
+            center_x, center_y = self._cell(x, y)
+            for cell_x in range(center_x - padding, center_x + padding + 1):
+                for cell_y in range(center_y - padding, center_y + padding + 1):
+                    for unit in self.cells.get((cell_x, cell_y), ()):
+                        candidates[unit.uid] = unit
+        return [candidates[uid] for uid in sorted(candidates)]
+
+
 @dataclass
 class Unit:
     kind: str
@@ -181,6 +285,15 @@ class Unit:
     tactical_timer: float = 0
     moved_this_update: bool = False
     home_position: Optional[tuple[float, float]] = None
+    nav_destination: Optional[tuple[float, float]] = None
+    nav_waypoints: list[tuple[float, float]] = field(default_factory=list)
+    nav_waypoint_index: int = 0
+    nav_blocked_time: float = 0.0
+    nav_last_path_time: float = -math.inf
+    nav_destination_key: object = None
+    nav_last_progress_position: Optional[tuple[float, float]] = None
+    nav_clear_time: float = 0.0
+    nav_side_preference: int = 0
 
     def __post_init__(self):
         try:
@@ -454,7 +567,6 @@ class EnemyAI:
     SWITCH_MARGIN = 18.0
     ARCHER_DANGER_RADIUS = 3.25
     ARCHER_SAFE_RADIUS = 4.25
-    SEPARATION_RADIUS = 1.15
     TACTICAL_RECHECK = .45
     RALLY_LEASH = 5.0
     RALLY_DISTANCE = 8.0
@@ -1761,28 +1873,6 @@ class EnemyAI:
                 x, y = anchor[0] + dx / length * radius, anchor[1] + dy / length * radius
         return clamp_to_map((x, y))
 
-    def _separation_vector(self, unit):
-        sx = sy = 0.0
-        for other in self.game.units:
-            if (
-                other is unit
-                or not other.is_enemy_ai_commandable
-                or other.health <= 0
-            ):
-                continue
-            dx, dy = unit.x - other.x, unit.y - other.y
-            distance = math.hypot(dx, dy)
-            if distance >= self.SEPARATION_RADIUS:
-                continue
-            if distance <= 1e-9:
-                # Stable uid-based direction makes exact overlaps deterministic.
-                angle = (unit.uid * 2.399963229728653) % math.tau
-                dx, dy, distance = math.cos(angle), math.sin(angle), 1e-6
-            strength = self.SEPARATION_RADIUS - distance
-            sx += dx / distance * strength
-            sy += dy / distance * strength
-        return sx, sy
-
     def tactical_destination(self, unit, dt):
         """Return a short-lived local steering goal for enemy units only."""
         if not unit.is_enemy_ai_commandable:
@@ -1896,13 +1986,6 @@ class EnemyAI:
                 unit.tactical_timer = self.TACTICAL_RECHECK
                 return unit.tactical_pos
 
-        separation_x, separation_y = self._separation_vector(unit)
-        if abs(separation_x) + abs(separation_y) > 1e-9:
-            unit.tactical_pos = self._constrain_tactical_position(
-                unit, (unit.x + separation_x, unit.y + separation_y)
-            )
-            unit.tactical_timer = self.TACTICAL_RECHECK
-            return unit.tactical_pos
         unit.tactical_pos = None
         return None
 
@@ -2092,9 +2175,16 @@ class Game:
 
     def reset(self):
         self.units: list[Unit] = []
+        self.unit_spatial_hash = UnitSpatialHash()
         self.essence = 400.0
         self.enemy_essence = 500.0
         self.uid = 0
+        self.navigation_time = 0.0
+        self.path_calculation_count = 0
+        self.path_calculation_lengths: list[int] = []
+        self.path_expanded_nodes = 0
+        self.path_max_expanded_nodes = 0
+        self.path_limit_failures = 0
         green_king = self.add_unit("king", "green", *GREEN_KING_POSITION)
         red_king = self.add_unit("king", "red", *RED_KING_POSITION)
         green_king.home_position = GREEN_KING_POSITION
@@ -2130,6 +2220,72 @@ class Game:
         for kind, dx, dy in ENEMY_STARTING_UNITS:
             self.add_unit(kind, "red", *offset_from(RED_KING_POSITION, (dx, dy)))
         self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
+        self._movement_snapshot_active = False
+        self.rebuild_unit_spatial_hash()
+
+    def rebuild_unit_spatial_hash(self):
+        """Snapshot all living units for local collision queries."""
+        self.unit_spatial_hash.rebuild(self.units)
+
+    def nearby_units(
+        self, unit, radius=UNIT_NEIGHBOR_QUERY_RADIUS, position=None
+    ):
+        position = position or self.unit_spatial_hash.positions.get(
+            unit.uid, (unit.x, unit.y)
+        )
+        return self.unit_spatial_hash.neighbors(
+            position, radius, exclude=unit
+        )
+
+    @staticmethod
+    def _overlap_fallback_direction(unit, other):
+        """Return opposite, deterministic directions for an exact-overlap pair."""
+        low_uid, high_uid = sorted((unit.uid, other.uid))
+        angle = (
+            (low_uid * 0.7548776662466927 + high_uid * 0.5698402909980532)
+            * math.tau
+        ) % math.tau
+        direction = (math.cos(angle), math.sin(angle))
+        return direction if unit.uid == low_uid else (-direction[0], -direction[1])
+
+    def unit_separation_vector(self, unit, position=None):
+        """Calculate soft overlap correction without changing strategic state.
+
+        This local physical response is shared by both teams. It does not
+        replace the preferred velocity supplied by an order, tactical slot, or
+        combat approach; ``move_unit_toward`` blends the two vectors.
+        """
+        if not self._movement_snapshot_active:
+            self.rebuild_unit_spatial_hash()
+        separation_x = separation_y = 0.0
+        minimum_distance = UNIT_SEPARATION_RADIUS - UNIT_SOFT_OVERLAP
+        unit_x, unit_y = position or self.unit_spatial_hash.positions.get(
+            unit.uid, (unit.x, unit.y)
+        )
+        for other in self.nearby_units(
+            unit, UNIT_SEPARATION_RADIUS, (unit_x, unit_y)
+        ):
+            other_x, other_y = self.unit_spatial_hash.positions.get(
+                other.uid, (other.x, other.y)
+            )
+            dx, dy = unit_x - other_x, unit_y - other_y
+            distance = math.hypot(dx, dy)
+            penetration = minimum_distance - distance
+            if penetration <= 0:
+                continue
+            if distance <= 1e-9:
+                direction_x, direction_y = self._overlap_fallback_direction(
+                    unit, other
+                )
+            else:
+                direction_x, direction_y = dx / distance, dy / distance
+            separation_x += direction_x * penetration
+            separation_y += direction_y * penetration
+        if not (
+            math.isfinite(separation_x) and math.isfinite(separation_y)
+        ):
+            return 0.0, 0.0
+        return separation_x, separation_y
 
     def team_king(self, team):
         """Return the team's live strategic objective, if it still exists."""
@@ -2278,15 +2434,29 @@ class Game:
         clicked = min(candidates, key=lambda e: dist((e.x, e.y), world), default=None)
         if clicked and dist((clicked.x, clicked.y), world) < 1.5:
             for u in selected:
+                self.clear_navigation(u)
                 u.target, u.target_pos = clicked, (clicked.x, clicked.y)
             return
         cols = math.ceil(math.sqrt(len(selected)))
         for i, u in enumerate(selected):
             offset = ((i % cols - (cols - 1) / 2) * 1.15, (i // cols) * 1.15)
+            self.clear_navigation(u)
             u.target = None
             u.target_pos = clamp_to_map(
                 (world[0] + offset[0], world[1] + offset[1])
             )
+
+    @staticmethod
+    def clear_navigation(unit):
+        """Invalidate cached path state while preserving the strategic order."""
+        unit.nav_destination = None
+        unit.nav_waypoints.clear()
+        unit.nav_waypoint_index = 0
+        unit.nav_blocked_time = 0.0
+        unit.nav_last_path_time = -math.inf
+        unit.nav_destination_key = None
+        unit.nav_last_progress_position = None
+        unit.nav_clear_time = 0.0
 
     def currently_visible_enemy(self, enemy):
         return self.is_visible(enemy.x, enemy.y)
@@ -2414,18 +2584,429 @@ class Game:
             self.particles.append([mx, my, .25, attacker.team])
 
     def move_unit_toward(self, unit, destination, dt):
-        """Move a unit and record actual displacement during this update."""
+        """Blend preferred travel with shared local separation.
+
+        During ``Game.update`` every unit reads the same pre-movement spatial
+        snapshot. Direct calls rebuild the index, which keeps this primitive
+        useful and unsurprising in tests and tools.
+        """
         dx, dy = destination[0] - unit.x, destination[1] - unit.y
         distance = math.hypot(dx, dy)
-        if distance < .08:
-            return False
-        before = (unit.x, unit.y)
-        step = min(distance, unit.speed * dt)
-        unit.x, unit.y = clamp_to_map(
-            (unit.x + dx / distance * step, unit.y + dy / distance * step)
+        preferred_x = preferred_y = 0.0
+        if distance >= .08:
+            preferred_x = dx / distance * unit.speed
+            preferred_y = dy / distance * unit.speed
+
+        preferred_step = min(
+            distance, unit.speed * max(0.0, dt)
+        ) if distance >= .08 else 0.0
+        predicted_position = (
+            unit.x + dx / distance * preferred_step,
+            unit.y + dy / distance * preferred_step,
+        ) if preferred_step else (unit.x, unit.y)
+        separation_x, separation_y = self.unit_separation_vector(
+            unit, predicted_position
         )
+        separation_amount = math.hypot(separation_x, separation_y)
+        # A unit already at its assigned slot should ignore shallow crowd
+        # pressure. Deep penetration still resolves, so this cannot create
+        # permanent stacks at a shared destination.
+        if (
+            distance <= UNIT_SLOT_SETTLE_RADIUS
+            and separation_amount <= .04
+        ):
+            separation_amount = 0.0
+            separation_x = separation_y = 0.0
+        if separation_amount <= UNIT_TINY_SEPARATION:
+            separation_x = separation_y = 0.0
+        else:
+            overlap_response = min(
+                1.0, separation_amount / UNIT_SOFT_OVERLAP
+            )
+            overlap_response = overlap_response * overlap_response * (
+                3.0 - 2.0 * overlap_response
+            )
+            separation_speed = min(
+                max(
+                    separation_amount * UNIT_SEPARATION_GAIN,
+                    unit.speed
+                    * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER
+                    * overlap_response,
+                ),
+                unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
+            )
+            separation_x = separation_x / separation_amount * separation_speed
+            separation_y = separation_y / separation_amount * separation_speed
+
+        velocity_x = preferred_x + separation_x
+        velocity_y = preferred_y + separation_y
+        velocity = math.hypot(velocity_x, velocity_y)
+        if velocity <= 1e-12 or dt <= 0:
+            return False
+        max_speed = unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER
+        if velocity > max_speed:
+            velocity_x *= max_speed / velocity
+            velocity_y *= max_speed / velocity
+        before = (unit.x, unit.y)
+        step = dt
+        if separation_x == separation_y == 0:
+            step = min(dt, distance / unit.speed) if unit.speed else 0
+        unit.x, unit.y = clamp_to_map(
+            (unit.x + velocity_x * step, unit.y + velocity_y * step)
+        )
+        if unit.is_autonomous_guard:
+            home = unit.home_position or before
+            leash_dx, leash_dy = unit.x - home[0], unit.y - home[1]
+            leash_distance = math.hypot(leash_dx, leash_dy)
+            if leash_distance > GUARD_LEASH_DISTANCE:
+                unit.x = home[0] + leash_dx / leash_distance * GUARD_LEASH_DISTANCE
+                unit.y = home[1] + leash_dy / leash_distance * GUARD_LEASH_DISTANCE
+                unit.x, unit.y = clamp_to_map((unit.x, unit.y))
         moved = dist(before, (unit.x, unit.y)) > 1e-9
         unit.moved_this_update |= moved
+        return moved
+
+    @staticmethod
+    def _nav_cell(position):
+        x, y = clamp_to_map(position)
+        return int(x), int(y)
+
+    @staticmethod
+    def _nav_world(cell):
+        return clamp_to_map((cell[0] + .5, cell[1] + .5))
+
+    @staticmethod
+    def _segment_distance(point, start, end):
+        vx, vy = end[0] - start[0], end[1] - start[1]
+        length2 = vx * vx + vy * vy
+        if length2 <= 1e-12:
+            return dist(point, start)
+        amount = max(0.0, min(
+            1.0,
+            ((point[0] - start[0]) * vx + (point[1] - start[1]) * vy)
+            / length2,
+        ))
+        closest = (start[0] + vx * amount, start[1] + vy * amount)
+        return dist(point, closest)
+
+    def _navigation_occupancy(self, mover, final_destination, combat_target=None):
+        """Build deterministic dynamic occupancy from the movement snapshot.
+
+        Stationary units and enemies are hard A* obstacles. Moving allies are
+        costly rather than blocked so crossing groups can flow through one
+        another. The mover, its combat target, and final destination remain
+        enterable. Stable UID iteration makes equivalent occupancy deterministic.
+        """
+        hard, soft = set(), {}
+        clearance = max(0.0, UNIT_PHYSICAL_RADIUS - UNIT_SOFT_OVERLAP)
+        for other in sorted(self.units, key=lambda candidate: candidate.uid):
+            if other is mover or other is combat_target or other.health <= 0:
+                continue
+            moving_ally = (
+                other.team == mover.team
+                and other.target_pos is not None
+                and other.speed > 0
+                and not other.is_king_objective
+            )
+            stationary_special = (
+                other.is_king_objective
+                or (other.is_autonomous_guard and other.target_pos is None)
+            )
+            radius = clearance * 2
+            min_x = max(0, int(math.floor(other.x - radius)))
+            max_x = min(MAP_SIZE - 1, int(math.floor(other.x + radius)))
+            min_y = max(0, int(math.floor(other.y - radius)))
+            max_y = min(MAP_SIZE - 1, int(math.floor(other.y + radius)))
+            for x in range(min_x, max_x + 1):
+                for y in range(min_y, max_y + 1):
+                    cell = (x, y)
+                    if dist(self._nav_world(cell), (other.x, other.y)) > radius:
+                        continue
+                    if moving_ally and not stationary_special:
+                        soft[cell] = max(soft.get(cell, 0.0), 8.0)
+                    else:
+                        hard.add(cell)
+        hard.discard(self._nav_cell((mover.x, mover.y)))
+        # Orders remain achievable even when their precise cell is occupied.
+        hard.discard(self._nav_cell(final_destination))
+        return hard, soft
+
+    def _corridor_clear(self, start, end, hard_cells):
+        """Grid line-of-sight with the same no-corner-cutting rule as A*."""
+        start_cell, end_cell = self._nav_cell(start), self._nav_cell(end)
+        x, y = start_cell
+        target_x, target_y = end_cell
+        dx, dy = abs(target_x - x), abs(target_y - y)
+        step_x = 1 if x < target_x else -1
+        step_y = 1 if y < target_y else -1
+        error = dx - dy
+        previous = (x, y)
+        while True:
+            if (x, y) != start_cell and (x, y) in hard_cells:
+                return False
+            if (x, y) == end_cell:
+                return True
+            doubled = 2 * error
+            next_x, next_y = x, y
+            if doubled > -dy:
+                error -= dy
+                next_x += step_x
+            if doubled < dx:
+                error += dx
+                next_y += step_y
+            if next_x != previous[0] and next_y != previous[1]:
+                if (next_x, previous[1]) in hard_cells:
+                    return False
+                if (previous[0], next_y) in hard_cells:
+                    return False
+            previous = (next_x, next_y)
+            x, y = next_x, next_y
+
+    def _direct_unit_corridor_clear(
+        self, mover, start, end, combat_target=None
+    ):
+        """Use exact unit geometry before paying the cost of grid routing."""
+        clearance = UNIT_SEPARATION_RADIUS - UNIT_SOFT_OVERLAP
+        if not self._movement_snapshot_active:
+            self.rebuild_unit_spatial_hash()
+        for other in self.unit_spatial_hash.segment_candidates(
+            start, end, clearance
+        ):
+            if other is mover or other is combat_target or other.health <= 0:
+                continue
+            moving_ally = (
+                other.team == mover.team
+                and other.target_pos is not None
+                and other.speed > 0
+                and not other.is_king_objective
+            )
+            if moving_ally:
+                continue
+            # The exact destination remains enterable even when occupied.
+            if dist((other.x, other.y), end) < clearance * .5:
+                continue
+            if self._segment_distance((other.x, other.y), start, end) < clearance:
+                return False
+        return True
+
+    def _astar(self, mover, destination, combat_target=None):
+        hard, soft = self._navigation_occupancy(
+            mover, destination, combat_target
+        )
+        start, goal = self._nav_cell((mover.x, mover.y)), self._nav_cell(destination)
+        if (
+            self._corridor_clear((mover.x, mover.y), destination, hard)
+            and self._corridor_clear(
+                (mover.x, mover.y), destination, set(soft)
+            )
+        ):
+            return [], hard
+        directions = (
+            (-1, 0), (0, -1), (0, 1), (1, 0),
+            (-1, -1), (-1, 1), (1, -1), (1, 1),
+        )
+        route_x, route_y = goal[0] - start[0], goal[1] - start[1]
+        route_length = max(1.0, math.hypot(route_x, route_y))
+        side_preference = mover.nav_side_preference or (
+            -1 if mover.uid % 2 else 1
+        )
+
+        def side_penalty(cell):
+            offset_x, offset_y = cell[0] - start[0], cell[1] - start[1]
+            cross = route_x * offset_y - route_y * offset_x
+            return max(0.0, -side_preference * cross / route_length) * .001
+
+        frontier = [(0.0, 0.0, start[1], start[0], start)]
+        came_from = {}
+        costs = {start: 0.0}
+        expanded = 0
+        while frontier:
+            _, current_cost, _, _, current = heapq.heappop(frontier)
+            if current_cost != costs.get(current):
+                continue
+            if expanded >= UNIT_ASTAR_MAX_EXPANSIONS:
+                self.path_expanded_nodes += expanded
+                self.path_max_expanded_nodes = max(
+                    self.path_max_expanded_nodes, expanded
+                )
+                self.path_limit_failures += 1
+                return None, hard
+            expanded += 1
+            if current == goal:
+                break
+            for offset_x, offset_y in directions:
+                neighbor = (current[0] + offset_x, current[1] + offset_y)
+                if not (0 <= neighbor[0] < MAP_SIZE and 0 <= neighbor[1] < MAP_SIZE):
+                    continue
+                if neighbor in hard:
+                    continue
+                diagonal = offset_x != 0 and offset_y != 0
+                if diagonal and (
+                    (current[0] + offset_x, current[1]) in hard
+                    or (current[0], current[1] + offset_y) in hard
+                ):
+                    continue
+                step_cost = math.sqrt(2) if diagonal else 1.0
+                new_cost = current_cost + step_cost + soft.get(neighbor, 0.0)
+                if new_cost + 1e-12 >= costs.get(neighbor, math.inf):
+                    continue
+                costs[neighbor] = new_cost
+                came_from[neighbor] = current
+                heuristic = math.hypot(goal[0] - neighbor[0], goal[1] - neighbor[1])
+                heapq.heappush(frontier, (
+                    new_cost + heuristic + side_penalty(neighbor), new_cost,
+                    neighbor[1], neighbor[0], neighbor,
+                ))
+        self.path_expanded_nodes += expanded
+        self.path_max_expanded_nodes = max(
+            self.path_max_expanded_nodes, expanded
+        )
+        if goal not in costs:
+            return None, hard
+        cells, current = [goal], goal
+        while current != start:
+            current = came_from[current]
+            cells.append(current)
+        cells.reverse()
+        # Greedily retain only waypoints required by occupancy line-of-sight.
+        waypoints = []
+        anchor_position = (mover.x, mover.y)
+        index = 1
+        while index < len(cells):
+            furthest = index
+            for candidate in range(index + 1, len(cells)):
+                if not self._corridor_clear(
+                    anchor_position, self._nav_world(cells[candidate]), hard
+                ):
+                    break
+                furthest = candidate
+            waypoint = (
+                destination if furthest == len(cells) - 1
+                else self._nav_world(cells[furthest])
+            )
+            waypoints.append(clamp_to_map(waypoint))
+            anchor_position = waypoints[-1]
+            index = furthest + 1
+        return waypoints, hard
+
+    def _navigation_destination(self, unit, destination, combat_target):
+        destination = clamp_to_map(destination)
+        if combat_target is None:
+            return destination
+        dx, dy = unit.x - combat_target.x, unit.y - combat_target.y
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            dx, dy, length = 1.0, 0.0, 1.0
+        # Aim slightly inside range so the movement tolerance cannot leave the
+        # unit just outside combat range forever.
+        approach = max(0.0, unit.attack_range - .12)
+        return clamp_to_map((
+            combat_target.x + dx / length * approach,
+            combat_target.y + dy / length * approach,
+        ))
+
+    def navigate_unit_toward(self, unit, destination, dt, combat_target=None):
+        """Move directly unless obstruction or a sustained stall activates A*.
+
+        Detour waypoints are cached across updates. A changed destination or
+        combat-target identity invalidates them immediately; blocked cached
+        segments replan on a bounded interval, and a clear direct corridor
+        must remain clear briefly before an old detour is discarded.
+        """
+        final = self._navigation_destination(unit, destination, combat_target)
+        if dist((unit.x, unit.y), final) <= UNIT_SLOT_SETTLE_RADIUS:
+            self.clear_navigation(unit)
+            return self.move_unit_toward(unit, final, dt)
+        target_key = (
+            getattr(combat_target, "uid", None),
+            combat_target is not None,
+        )
+        destination_changed = (
+            unit.nav_destination is None
+            or dist(unit.nav_destination, final) > .35
+            or unit.nav_destination_key != target_key
+        )
+        if destination_changed:
+            self.clear_navigation(unit)
+            unit.nav_destination = final
+            unit.nav_destination_key = target_key
+            unit.nav_last_progress_position = (unit.x, unit.y)
+            # Keep equivalent detours on one deterministic side for the life
+            # of this strategic destination.
+            unit.nav_side_preference = -1 if unit.uid % 2 else 1
+
+        direct_clear = self._direct_unit_corridor_clear(
+            unit, (unit.x, unit.y), final, combat_target
+        )
+        next_waypoint = (
+            unit.nav_waypoints[unit.nav_waypoint_index]
+            if unit.nav_waypoint_index < len(unit.nav_waypoints) else None
+        )
+        # Occupancy is only needed to create or validate a detour.  The common
+        # unobstructed case has already been decided by exact unit geometry.
+        hard, _ = (
+            self._navigation_occupancy(unit, final, combat_target)
+            if not direct_clear or next_waypoint is not None
+            else (set(), {})
+        )
+        next_blocked = (
+            next_waypoint is not None
+            and not self._corridor_clear((unit.x, unit.y), next_waypoint, hard)
+        )
+        last_progress = unit.nav_last_progress_position or (unit.x, unit.y)
+        progress = dist(last_progress, (unit.x, unit.y))
+        if progress >= .04:
+            unit.nav_blocked_time = 0.0
+            unit.nav_last_progress_position = (unit.x, unit.y)
+        else:
+            unit.nav_blocked_time += max(0.0, dt)
+
+        refresh_due = (
+            self.navigation_time - unit.nav_last_path_time
+            >= UNIT_PATH_RECALCULATION_INTERVAL
+        )
+        stalled = unit.nav_blocked_time >= UNIT_BLOCKED_TIME_THRESHOLD
+        need_path = (
+            (not direct_clear or stalled)
+            and (
+                destination_changed
+                or not unit.nav_waypoints
+                or (next_blocked and refresh_due)
+                or (stalled and refresh_due)
+            )
+        )
+        if need_path:
+            waypoints, _ = self._astar(unit, final, combat_target)
+            self.path_calculation_count += 1
+            self.path_calculation_lengths.append(
+                0 if waypoints is None else len(waypoints)
+            )
+            unit.nav_last_path_time = self.navigation_time
+            unit.nav_blocked_time = 0.0
+            unit.nav_last_progress_position = (unit.x, unit.y)
+            unit.nav_waypoints = waypoints or []
+            unit.nav_waypoint_index = 0
+            unit.nav_clear_time = 0.0
+            next_waypoint = unit.nav_waypoints[0] if unit.nav_waypoints else None
+        elif direct_clear and next_waypoint is not None:
+            unit.nav_clear_time += max(0.0, dt)
+            if unit.nav_clear_time < UNIT_PATH_CLEAR_HYSTERESIS:
+                direct_clear = False
+        else:
+            unit.nav_clear_time = 0.0
+        if direct_clear:
+            unit.nav_waypoints.clear()
+            unit.nav_waypoint_index = 0
+            next_waypoint = None
+
+        travel_target = clamp_to_map(next_waypoint or final)
+        moved = self.move_unit_toward(unit, travel_target, dt)
+        if next_waypoint is not None and dist(
+            (unit.x, unit.y), next_waypoint
+        ) <= UNIT_WAYPOINT_ARRIVAL_TOLERANCE:
+            unit.nav_waypoint_index += 1
+        if dist((unit.x, unit.y), final) < .08:
+            self.clear_navigation(unit)
         return moved
 
     def update_unit(self, u, dt):
@@ -2435,11 +3016,13 @@ class Game:
             u.target = None
             u.target_pos = None
             u.tactical_pos = None
+            self.clear_navigation(u)
             return
         if u.is_king_objective:
             u.selected = False
             u.tactical_pos = None
             u.target_pos = None
+            self.clear_navigation(u)
             if u.home_position is None:
                 u.home_position = (u.x, u.y)
             u.x, u.y = u.home_position
@@ -2461,7 +3044,14 @@ class Game:
         movement_locked = u.kind == "archer" and u.movement_lock_timer > 0
         target = u.target
         if target is not None and getattr(target, "health", 0) <= 0:
+            dead_target_position = (target.x, target.y)
             u.target = target = None
+            if (
+                u.target_pos is not None
+                and dist(u.target_pos, dead_target_position) <= .35
+            ):
+                u.target_pos = None
+            self.clear_navigation(u)
         if u.is_king_objective:
             target = self.autonomous_king_target(u)
             u.target = target
@@ -2480,7 +3070,7 @@ class Game:
                     u.x, u.y = u.home_position
                     u.target_pos = None
                 else:
-                    self.move_unit_toward(u, u.home_position, dt)
+                    self.navigate_unit_toward(u, u.home_position, dt)
                     if (u.x, u.y) == u.home_position:
                         u.target_pos = None
                 return
@@ -2492,18 +3082,19 @@ class Game:
                     u.x, u.y = u.home_position
                     u.target_pos = None
                 else:
-                    self.move_unit_toward(u, u.home_position, dt)
+                    self.navigate_unit_toward(u, u.home_position, dt)
                     if (u.x, u.y) == u.home_position:
                         u.target_pos = None
                 return
             d = dist((u.x, u.y), (target.x, target.y))
             if d <= u.attack_range:
                 u.target_pos = None
+                self.clear_navigation(u)
                 if u.attack_timer <= 0:
                     self.attack(u, target)
                 return
             u.target_pos = self.guard_chase_destination(u, target)
-            self.move_unit_toward(u, u.target_pos, dt)
+            self.navigate_unit_toward(u, u.target_pos, dt, target)
             return
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
@@ -2519,16 +3110,16 @@ class Game:
             if u.is_enemy_ai_commandable else None
         )
         if tactical_pos is not None:
+            if not movement_locked and self.move_unit_toward(
+                u, tactical_pos, dt
+            ):
+                return
             if dist((u.x, u.y), tactical_pos) < .08:
                 u.tactical_pos = None
-                # Negligible local corrections must not consume the whole update.
-                # Otherwise stable formations continually recompute tiny
-                # separation moves and never resume their strategic order.
-            elif not movement_locked and self.move_unit_toward(u, tactical_pos, dt):
-                return
         if target is not None:
             d = dist((u.x, u.y), (target.x, target.y))
             if d <= u.attack_range:
+                self.clear_navigation(u)
                 if (
                     u.attack_timer <= 0
                     and (u.kind != "archer" or not u.moved_this_update)
@@ -2538,19 +3129,38 @@ class Game:
             u.target_pos = (target.x, target.y)
         if u.target_pos:
             if dist((u.x, u.y), u.target_pos) < .08:
-                u.target_pos = None
+                if (
+                    movement_locked
+                    or not self.navigate_unit_toward(
+                        u, u.target_pos, dt, target
+                    )
+                ):
+                    u.target_pos = None
+                    self.clear_navigation(u)
             elif not movement_locked:
-                self.move_unit_toward(u, u.target_pos, dt)
+                self.navigate_unit_toward(u, u.target_pos, dt, target)
+        elif not movement_locked:
+            # Commandable units with no current order may still resolve an
+            # excessive overlap. Kings and idle guards never reach this path.
+            self.move_unit_toward(u, (u.x, u.y), dt)
 
     def update(self, dt):
         if self.state != "playing" or self.winner:
             return
         self.message_time = max(0, self.message_time - dt)
+        self.navigation_time += max(0.0, dt)
         self.essence += 20 * dt
         self.enemy_essence += 20 * dt
         self.enemy_ai.update(dt)
-        for u in list(self.units):
-            self.update_unit(u, dt)
+        # One deterministic snapshot per simulation update. Movement still uses
+        # the same pre-movement positions, avoiding list-order feedback.
+        self.rebuild_unit_spatial_hash()
+        self._movement_snapshot_active = True
+        try:
+            for u in list(self.units):
+                self.update_unit(u, dt)
+        finally:
+            self._movement_snapshot_active = False
         dead_units = [unit for unit in self.units if unit.health <= 0]
         dead_green_king = any(
             unit.team == "green" and unit.is_king_objective
@@ -2578,6 +3188,7 @@ class Game:
             ):
                 unit.target = None
                 unit.target_pos = None
+                self.clear_navigation(unit)
         for a in self.arrows:
             a[4] -= dt
         self.arrows[:] = [a for a in self.arrows if a[4] > 0]

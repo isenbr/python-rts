@@ -1,0 +1,53 @@
+Perform a final review of the complete unit-overlap and navigation
+implementation.
+
+Review for:
+
+- duplicated red-only versus shared movement logic;
+- stale path state;
+- order cancellation bugs;
+- update-order bias;
+- combat targets becoming unreachable;
+- archers firing after movement;
+- guards violating their leash;
+- formation slots fighting separation;
+- nondeterminism from set/dict iteration;
+- expensive full-unit scans;
+- missing map clamps;
+- unexplained constants.
+
+Then:
+
+1. Refactor only where it improves correctness or clarity.
+2. Add docstrings/comments explaining:
+   - soft overlap;
+   - preferred movement versus separation;
+   - when A* activates;
+   - dynamic occupancy;
+   - path caching and invalidation.
+3. Update README.md with a short description of unit navigation behavior and its
+   intentional slight-overlap rule.
+4. Run the entire test suite and all headless simulations.
+5. Launch the game and manually inspect:
+   - a large selected group moving to one point;
+   - groups crossing;
+   - pathfinding around a stationary group;
+   - melee congestion;
+   - guards and kings;
+   - red formations.
+
+If taking screenshots:
+- save them only under /work/screenshots;
+- after each screenshot, inspect it with view_image using its absolute path;
+- report visual issues such as stacking, jitter, broken formations, or units
+  outside the map.
+
+Provide a final summary containing:
+- files changed;
+- movement/navigation design;
+- tests and simulations run with results;
+- performance metrics;
+- known limitations;
+- manual visual findings.
+
+Do not commit changes.

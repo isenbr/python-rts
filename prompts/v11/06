@@ -1,0 +1,33 @@
+Continue from the previous stage.
+
+Validate performance and long-term correctness without changing game balance.
+
+1. Add a deterministic headless simulation with progressively larger armies,
+   such as 25, 50, 100, and 200 moving units.
+2. Measure:
+   - average nearby-unit candidates per mover;
+   - maximum candidates;
+   - paths calculated per simulated second;
+   - expanded A* nodes;
+   - movement-update time if a stable timing assertion is practical.
+3. Prefer structural assertions over fragile wall-clock limits:
+   - neighbor candidates should remain local rather than becoming all-pairs;
+   - idle or unobstructed units should rarely invoke A*;
+   - cached paths should be reused;
+   - pathfinding must have a hard node/iteration limit and fail safely.
+4. Run a long match simulation and check:
+   - no NaN or infinite coordinates;
+   - all units remain within map boundaries;
+   - overlap stays bounded;
+   - units continue progressing;
+   - dead units disappear from navigation occupancy;
+   - winner detection and enemy AI state transitions still work.
+5. Optimize only demonstrated hot spots. Keep the implementation readable and
+   centralized.
+
+Checks:
+- Run the performance-focused tests.
+- Run all simulations already present in the repository.
+- Run the complete test suite.
+- Report before/after structural metrics and any remaining scaling limit.
+- Do not commit changes.

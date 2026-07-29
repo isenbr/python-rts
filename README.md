@@ -26,6 +26,20 @@ Friendly army units reveal 8 tiles and the Verdant King reveals 12. The HUD
 shows only your king's health; the hidden Crimson King's health is never
 revealed. Kill the Crimson King to win. If the Verdant King dies, you lose.
 
+## Unit navigation
+
+Move orders assign stable formation slots. Units normally travel directly
+toward those slots while a shared local separation force gently resolves
+crowding for both armies. A slight overlap is intentional: units behave as
+soft obstacles, which keeps formations and congested melee groups moving
+without producing rigid gaps or constant jitter.
+
+Stationary units and opposing troops can trigger grid-based A* detours when a
+direct route is blocked or movement has stalled. Moving allies are treated as
+costly, passable occupancy so groups can cross. Paths are cached, refreshed
+when their corridor changes, and invalidated immediately by a new destination
+or combat target. All movement and waypoints are clamped to the map.
+
 ## Enemy production tuning
 
 Before seeing a player army, enemy recruitment aims to invest one third of its

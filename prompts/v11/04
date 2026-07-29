@@ -1,0 +1,67 @@
+Continue from the previous stage.
+
+Implement pathfinding around units for cases where local separation alone cannot
+make progress.
+
+Use a lightweight dynamic-obstacle approach appropriate for this open 120x120
+battlefield. A coarse A* grid with cached paths is acceptable. Direct movement
+should remain the normal fast path; pathfinding should activate only when the
+direct corridor is obstructed or a unit has failed to make meaningful progress
+for the configured blocked-time threshold.
+
+Requirements:
+
+1. Store per-unit navigation state separately from strategic target_pos:
+   - final destination;
+   - current path waypoints;
+   - current waypoint index;
+   - blocked/progress timer;
+   - last path calculation time;
+   - enough destination information to detect stale paths.
+
+2. Build dynamic occupancy from living units:
+   - inflate occupied cells by unit radius minus allowed soft overlap;
+   - allow the mover's own cell;
+   - do not make the exact final target permanently unreachable;
+   - handle a combat target specially so melee units can approach attack range
+     rather than trying to occupy the target's center;
+   - allow limited passage through moving allies when necessary, but strongly
+     prefer open cells;
+   - treat stationary kings and guards as strong obstacles unless they are the
+     intended combat target.
+
+3. Before A*, check whether the direct corridor is clear.
+4. Use deterministic A* tie-breaking.
+5. Permit diagonal movement only if it cannot cut through blocked corners.
+6. Convert the cell path to world-space waypoints and simplify it with
+   line-of-sight checks.
+7. Recalculate paths only when:
+   - the destination changes materially;
+   - the next corridor becomes blocked;
+   - progress remains insufficient;
+   - the refresh interval expires.
+8. Clear navigation state when orders are cancelled, targets die, units die, or
+   a destination is reached.
+9. Clamp every waypoint and resulting position to map bounds.
+10. If no route currently exists, keep the order alive and retry later instead
+    of deleting it.
+
+Add tests for:
+- walking around a stationary wall of units;
+- navigating a narrow but valid gap;
+- not cutting diagonally through blocked corners;
+- approaching an enemy only to attack range;
+- replanning when a blocker moves into the path;
+- reusing a cached path when nothing changes;
+- recovering when a temporary route is unavailable;
+- replacing a path when the player issues a new order;
+- deterministic paths across repeated runs;
+- destinations near all four map edges.
+
+Checks:
+- Run the focused pathfinding tests.
+- Run the complete test suite.
+- Instrument path-calculation counts in tests and confirm paths are not
+  recalculated every frame.
+- Report the worst path length and recalculation count in the test scenarios.
+- Do not commit changes.

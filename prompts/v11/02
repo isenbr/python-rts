@@ -1,0 +1,39 @@
+Continue from the previous stage.
+
+Implement shared unit-collision primitives used by both teams. Do not add
+pathfinding yet.
+
+Requirements:
+
+1. Introduce a deterministic spatial hash or uniform grid for living units so
+   nearby-unit queries do not scan the complete unit list for every mover.
+2. Include relevant living units from both teams, including kings and guards
+   where appropriate.
+3. Give moving units a shared physical radius, or clearly defined per-kind radii
+   if the rendered sizes justify them.
+4. Treat units as soft circular obstacles:
+   - slight overlap is allowed;
+   - deeper penetration produces stronger separation;
+   - exact overlaps use a stable UID-based fallback direction;
+   - never generate NaN or infinite coordinates.
+5. Keep calculations deterministic by sorting ambiguous neighbors by UID.
+6. Rebuild or update the spatial index at a clearly defined point in each game
+   update.
+7. Do not mutate strategic target_pos values when calculating local movement.
+
+Add tests for:
+- querying neighbors within the correct cells;
+- units outside the query radius being ignored;
+- exact overlaps producing finite deterministic vectors;
+- dead units being excluded;
+- map-edge neighbor queries;
+- both friendly and enemy units being detected;
+- a moderately large group not requiring all-pairs neighbor checks.
+
+Checks:
+- Run the focused new tests.
+- Run the entire test suite.
+- Verify that movement behavior has not changed yet.
+- Briefly report the chosen radii, the maximum permitted overlap, and the
+  expected query complexity.
+- Do not commit changes.

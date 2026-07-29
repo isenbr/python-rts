@@ -1,0 +1,44 @@
+Continue from the previous stage.
+
+Stress-test and refine the interaction between separation, dynamic pathfinding,
+formations, and combat.
+
+Create deterministic scenarios containing:
+
+- two friendly groups crossing at right angles;
+- opposing groups passing or engaging head-on;
+- many units ordered through the same narrow gap;
+- a slow unit in front of a faster unit;
+- a dense melee surrounding one target;
+- formation members trying to reach nearby slots;
+- units spawned at identical coordinates;
+- units trapped near a map corner;
+- a blocker that repeatedly enters and leaves a planned route.
+
+Fix observed problems without redesigning strategic AI.
+
+Required behavior:
+
+1. Units should not oscillate rapidly between left and right detours.
+2. Add stable side preference or path hysteresis when equivalent detours exist.
+3. Units should not permanently deadlock behind a slower ally.
+4. Units close to their formation slots should settle rather than jitter.
+5. A crowded melee may contain some overlap, but penetration must remain
+   bounded.
+6. Ranged units should not constantly repath while safely firing.
+7. Units must retain their final strategic order while following temporary
+   waypoints.
+8. Do not let separation push units through map boundaries or excessively away
+   from guard/rally/defense constraints.
+
+Add regression tests for every bug found.
+
+Checks:
+- Run each stress scenario for a fixed simulated duration.
+- Assert bounded maximum penetration, minimum destination progress, finite
+  coordinates, and a limit on path recalculations.
+- Run scenarios twice and confirm deterministic results.
+- Run the complete test suite.
+- Report any intentional compromises, particularly congestion behavior during
+  melee.
+- Do not commit changes.

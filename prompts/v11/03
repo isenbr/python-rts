@@ -1,0 +1,50 @@
+Continue from the previous stage.
+
+Replace the red-AI-only separation behavior with a shared local separation
+system in Game movement so it applies consistently to:
+
+- green commandable units;
+- red commandable units;
+- autonomous guards while moving;
+- units chasing targets;
+- units returning to posts or formations.
+
+Requirements:
+
+1. Calculate a preferred movement vector toward the current tactical, strategic,
+   chase, or home destination.
+2. Blend it with a separation vector from nearby units.
+3. Strategic progress must remain dominant when overlap is minor.
+4. Separation strength must increase smoothly once overlap exceeds the allowed
+   soft amount.
+5. A tiny separation correction must not consume an update or stall movement,
+   matching the intent of the existing tiny-correction logic.
+6. Stationary kings and stationary guards must not be displaced.
+7. Preserve archer movement-lock and "cannot fire after moving" behavior.
+8. Preserve map clamping.
+9. Avoid update-order bias where possible. If positions are resolved from a
+   frame snapshot, explain and test that design.
+10. Remove or adapt the old EnemyAI separation code so separation is not
+    applied twice.
+
+Add tests for:
+- green units separating;
+- red units separating;
+- mixed-team overlap resolving outside melee;
+- exact overlaps resolving deterministically;
+- slight overlap remaining allowed;
+- units continuing to make progress toward their order;
+- kings staying fixed;
+- guards respecting their leash and home post;
+- archers retaining movement/fire restrictions;
+- positions always remaining within the map.
+
+Checks:
+- Run focused separation and movement tests.
+- Run the complete test suite.
+- Simulate dense groups for multiple frame rates, including dt values
+  representing 30, 60, and 120 FPS, and compare final separation/progress within
+  a reasonable tolerance.
+- Report any behavior that remains intentionally unresolved for the pathfinding
+  stage.
+- Do not commit changes.
