@@ -3827,7 +3827,7 @@ class Game:
         sub = self.title.render("A MEDIEVAL RTS", True, GOLD)
         self.screen.blit(sub, (w // 2 - sub.get_width() // 2, 225))
         lore = self.font.render(
-            "Hire an army to defeat the Crimson King.",
+            "Raise an army. Defy the Crimson King.",
             True,
             (191, 181, 152),
         )
@@ -3840,18 +3840,16 @@ class Game:
     def draw_level_select(self):
         w, h = self.screen.get_size()
         self.screen.fill((24, 37, 28))
-        heading = self.title.render("CHOOSE YOUR CAMPAIGN", True, CREAM)
-        self.screen.blit(heading, heading.get_rect(center=(w // 2, 82)))
-        sub = self.small.render(
-            "Three battles. One crown. Select a level to march.",
-            True, (190, 180, 153),
-        )
-        self.screen.blit(sub, sub.get_rect(center=(w // 2, 122)))
-        card_w, card_h, gap = 330, 360, 28
+        heading = self.title.render("BEGIN THE CONQUEST", True, CREAM)
+        self.screen.blit(heading, heading.get_rect(center=(w // 2, 92)))
+        gap = max(24, round(w * .015))
+        side_margin = max(80, round(w * .08))
+        card_w = max(320, (w - side_margin * 2 - gap * 2) // 3)
+        card_h = max(440, h - 260)
         start_x = w // 2 - (card_w * 3 + gap * 2) // 2
         self.level_buttons = []
         for index, config in enumerate(LEVELS.values()):
-            card = pygame.Rect(start_x + index * (card_w + gap), 165, card_w, card_h)
+            card = pygame.Rect(start_x + index * (card_w + gap), 145, card_w, card_h)
             hover = card.collidepoint(pygame.mouse.get_pos())
             pygame.draw.rect(
                 self.screen, (53, 48, 39) if hover else (43, 41, 35),
@@ -3862,33 +3860,52 @@ class Game:
                 card, 3, border_radius=16,
             )
             number = self.big.render(str(config.number), True, GOLD)
-            self.screen.blit(number, number.get_rect(center=(card.centerx, card.y + 70)))
-            name = self.font.render(config.name, True, CREAM)
-            self.screen.blit(name, name.get_rect(center=(card.centerx, card.y + 125)))
-            map_label = self.small.render(
-                f"{config.map_size} × {config.map_size} MAP", True, (142, 190, 149)
-            )
-            self.screen.blit(
-                map_label, map_label.get_rect(center=(card.centerx, card.y + 158))
-            )
-            words = config.description.split()
+            self.screen.blit(number, number.get_rect(center=(card.centerx, card.y + 52)))
+            display_names = {
+                1: "Survive the Ambush!",
+                2: "Punish Your Enemies!",
+                3: "Kill the Crimson King!",
+            }
+            display_name = display_names[config.number]
+            name = self.font.render(display_name, True, CREAM)
+            self.screen.blit(name, name.get_rect(center=(card.centerx, card.y + 96)))
+            story_descriptions = {
+                1: (
+                    "Crimson raiders strike at dawn. Hold the line and "
+                    "survive."
+                ),
+                2: (
+                    "March down the long road. Break every force sent "
+                    "against you."
+                ),
+                3: (
+                    "Storm the Crimson stronghold and end the tyrant's "
+                    "reign."
+                ),
+            }
+            words = story_descriptions[config.number].split()
             lines, line = [], ""
             for word in words:
                 candidate = f"{line} {word}".strip()
-                if self.small.size(candidate)[0] > card_w - 48:
+                if self.small.size(candidate)[0] > card_w - 70:
                     lines.append(line)
                     line = word
                 else:
                     line = candidate
             lines.append(line)
             for line_index, text in enumerate(lines):
-                label = self.small.render(text, True, (190, 180, 153))
+                description = self.small.render(text, True, (190, 180, 153))
                 self.screen.blit(
-                    label,
-                    label.get_rect(center=(card.centerx, card.y + 205 + line_index * 22)),
+                    description,
+                    description.get_rect(
+                        center=(
+                            card.centerx,
+                            card.y + 142 + line_index * 22,
+                        )
+                    ),
                 )
             button = Button(
-                (card.x + 55, card.bottom - 78, card_w - 110, 52),
+                (card.x + 45, card.bottom - 60, card_w - 90, 44),
                 f"Play Level {config.number}",
             )
             button.draw(
