@@ -86,6 +86,18 @@ class PathfindingTests(unittest.TestCase):
         self.step(game, mover, .4, .05)
         self.assertEqual(game.path_calculation_count, 1)
 
+    def test_failed_path_waits_for_recalculation_interval(self):
+        game = self.game()
+        mover = game.add_unit("swordsman", "green", WORLD_MIN, 60.5)
+        for y in range(120):
+            game.add_unit("king", "red", 1.5, y + .5)
+        mover.target_pos = (5.5, 60.5)
+
+        self.step(game, mover, .4, .05)
+
+        self.assertEqual(game.path_calculation_count, 1)
+        self.assertEqual(mover.nav_waypoints, [])
+
     def test_recovers_after_route_temporarily_unavailable(self):
         game = self.game()
         mover = game.add_unit("swordsman", "green", WORLD_MIN, 60.5)

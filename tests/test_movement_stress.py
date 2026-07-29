@@ -134,7 +134,7 @@ class MovementStressTests(unittest.TestCase):
                 for index in range(12)
             ]
             for y in list(range(43, 49)) + list(range(52, 58)):
-                game.add_unit("king", "red", 30.5, y + .5)
+                game.add_unit("king", "green", 30.5, y + .5)
             for unit in movers:
                 unit.target_pos = (45, 50)
             return game, movers
@@ -162,6 +162,7 @@ class MovementStressTests(unittest.TestCase):
             game = self.game()
             target = game.add_unit("king", "red", 60, 60)
             target.health = 100000
+            target.speed = 0
             attackers = []
             for index in range(16):
                 angle = index * math.tau / 16

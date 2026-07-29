@@ -61,7 +61,7 @@ class ExistingMechanicsTests(GameTestCase):
                 "cooldown": 1, "attack_range": 1.02,
             },
             "king": {
-                "max_health": 700, "speed": 0, "damage": 20,
+                "max_health": 700, "speed": 1, "damage": 20,
                 "cooldown": .4, "attack_range": 1.5,
             },
             "knight": {
@@ -74,7 +74,7 @@ class ExistingMechanicsTests(GameTestCase):
         })
         self.assertEqual(UNIT_RENDER_SCALES, {
             "swordsman": 1.55, "archer": 1.55, "shield": 1.55 * 1.15,
-            "king": 1.3, "knight": 1.15,
+            "king": 2.2, "knight": 2.0,
         })
 
     def test_initial_bases_and_units_are_inside_map(self):

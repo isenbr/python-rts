@@ -68,10 +68,11 @@ UNIT_SLOT_SETTLE_RADIUS = .12
 # below a full-map flood while still allowing long routes around ordinary
 # formations.
 UNIT_ASTAR_MAX_EXPANSIONS = 4096
-# Guards may leave their post by at most three tiles.  This deliberately short
-# leash lets them intercept nearby attackers without turning them into roaming
-# army units.
-GUARD_LEASH_DISTANCE = 3.0
+# Kings and knights defend a fixed area around their starting post. They may
+# acquire enemies inside this radius, but movement is clamped to the same
+# circle so neither special unit can turn into a roaming army unit.
+DEFENDER_CHASE_RADIUS = 20.0
+GUARD_LEASH_DISTANCE = DEFENDER_CHASE_RADIUS
 UNIT_STATS = {
     "swordsman": {
         "max_health": 100,
@@ -96,7 +97,7 @@ UNIT_STATS = {
     },
     "king": {
         "max_health": 700,
-        "speed": 0,
+        "speed": SWORDSMAN_BASE_SPEED,
         "damage": 20,
         "cooldown": .4,
         "attack_range": 1.5,
@@ -110,13 +111,15 @@ UNIT_STATS = {
     },
 }
 ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER = .3
+ARCHER_DAMAGE_VS_KING_MULTIPLIER = .5
+ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER = .7
 UNIT_COSTS = {"swordsman": 200, "archer": 500, "shield": 300}
 UNIT_RENDER_SCALES = {
     "swordsman": 1.55,
     "archer": 1.55,
     "shield": 1.55 * 1.15,
-    "king": 1.3,
-    "knight": 1.15,
+    "king": 2.2,
+    "knight": 2.0,
 }
 MIN_UNIT_RENDER_SIZE = 8
 KING_SLASH_LIFETIME = .20
@@ -2601,22 +2604,11 @@ class Game:
         )
 
     def autonomous_king_target(self, king):
-        """Choose the nearest local target without consulting fog or either AI."""
-        origin = king.home_position or (king.x, king.y)
-        candidates = [
-            unit for unit in self.units
-            if unit.team != king.team
-            and unit.health > 0
-            and dist(origin, (unit.x, unit.y)) <= king.attack_range
-        ]
-        return min(
-            candidates,
-            key=lambda unit: (dist(origin, (unit.x, unit.y)), unit.uid),
-            default=None,
-        )
+        """Choose the nearest enemy inside the king's home defense radius."""
+        return self.autonomous_guard_target(king)
 
     def autonomous_guard_target(self, guard):
-        """Choose a locally seen target that can be engaged from the short leash."""
+        """Choose the nearest enemy inside a special unit's home defense radius."""
         candidates = [
             unit for unit in self.units
             if self.is_valid_guard_target(guard, unit)
@@ -2639,12 +2631,7 @@ class Game:
         ):
             return False
         home = guard.home_position or (guard.x, guard.y)
-        return (
-            dist((guard.x, guard.y), (target.x, target.y))
-            <= UNIT_VISION_RADIUS
-            and dist(home, (target.x, target.y))
-            <= GUARD_LEASH_DISTANCE + guard.attack_range
-        )
+        return dist(home, (target.x, target.y)) <= GUARD_LEASH_DISTANCE
 
     @staticmethod
     def guard_chase_destination(guard, target):
@@ -2663,8 +2650,13 @@ class Game:
         if attacker.health <= 0 or target.health <= 0:
             return
         damage = attacker.damage
-        if attacker.kind == "archer" and getattr(target, "kind", None) == "shield":
-            damage *= ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER
+        if attacker.kind == "archer":
+            arrow_multiplier = {
+                "shield": ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER,
+                "king": ARCHER_DAMAGE_VS_KING_MULTIPLIER,
+                "knight": ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
+            }.get(getattr(target, "kind", None), 1.0)
+            damage *= arrow_multiplier
         target.health -= damage
         target.flash = .12
         attacker.attack_timer = attacker.cooldown
@@ -2757,7 +2749,7 @@ class Game:
         unit.x, unit.y = clamp_to_map(
             (unit.x + velocity_x * step, unit.y + velocity_y * step)
         )
-        if unit.is_autonomous_guard:
+        if unit.is_king_objective or unit.is_autonomous_guard:
             home = unit.home_position or before
             leash_dx, leash_dy = unit.x - home[0], unit.y - home[1]
             leash_distance = math.hypot(leash_dx, leash_dy)
@@ -3073,9 +3065,14 @@ class Game:
             (not direct_clear or stalled)
             and (
                 destination_changed
-                or not unit.nav_waypoints
-                or (next_blocked and refresh_due)
-                or (stalled and refresh_due)
+                or (
+                    refresh_due
+                    and (
+                        not unit.nav_waypoints
+                        or next_blocked
+                        or stalled
+                    )
+                )
             )
         )
         if need_path:
@@ -3121,15 +3118,7 @@ class Game:
             u.tactical_pos = None
             self.clear_navigation(u)
             return
-        if u.is_king_objective:
-            u.selected = False
-            u.tactical_pos = None
-            u.target_pos = None
-            self.clear_navigation(u)
-            if u.home_position is None:
-                u.home_position = (u.x, u.y)
-            u.x, u.y = u.home_position
-        elif u.is_autonomous_guard:
+        if u.is_king_objective or u.is_autonomous_guard:
             u.selected = False
             u.tactical_pos = None
             if u.home_position is None:
@@ -3155,13 +3144,7 @@ class Game:
             ):
                 u.target_pos = None
             self.clear_navigation(u)
-        if u.is_king_objective:
-            target = self.autonomous_king_target(u)
-            u.target = target
-            if target is not None and u.attack_timer <= 0:
-                self.attack(u, target)
-            return
-        if u.is_autonomous_guard:
+        if u.is_king_objective or u.is_autonomous_guard:
             previous_target = target
             away_from_post = dist((u.x, u.y), u.home_position) > 1e-9
             if away_from_post and not self.is_valid_guard_target(

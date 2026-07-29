@@ -50,9 +50,16 @@ class UnitRoleAndRosterTests(unittest.TestCase):
                 king.cooldown,
                 king.attack_range,
             ),
-            (700, 700, 0, 20, .4, 1.5),
+            (700, 700, SWORDSMAN_BASE_SPEED, 20, .4, 1.5),
         )
-        self.assertEqual(UNIT_RENDER_SCALES["king"], 1.3)
+        self.assertEqual(UNIT_RENDER_SCALES["king"], 2.2)
+        self.assertGreater(
+            UNIT_RENDER_SCALES["king"],
+            max(
+                UNIT_RENDER_SCALES[kind]
+                for kind in ("swordsman", "archer", "shield")
+            ),
+        )
 
     def test_knight_has_exact_stats_and_shares_swordsman_values(self):
         knight = Unit("knight", "green", 10, 10)
@@ -74,7 +81,14 @@ class UnitRoleAndRosterTests(unittest.TestCase):
             UNIT_STATS["knight"]["attack_range"],
             UNIT_STATS["swordsman"]["attack_range"],
         )
-        self.assertEqual(UNIT_RENDER_SCALES["knight"], 1.15)
+        self.assertEqual(UNIT_RENDER_SCALES["knight"], 2.0)
+        self.assertGreater(
+            UNIT_RENDER_SCALES["knight"],
+            max(
+                UNIT_RENDER_SCALES[kind]
+                for kind in ("swordsman", "archer", "shield")
+            ),
+        )
 
     def test_role_and_control_predicates_are_explicit(self):
         green_sword = Unit("swordsman", "green", 0, 0)

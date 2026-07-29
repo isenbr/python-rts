@@ -5,10 +5,11 @@ import unittest
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 from main import (
+    ARCHER_DAMAGE_VS_KING_MULTIPLIER,
+    ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
     GUARD_LEASH_DISTANCE,
     KING_SLASH_LIFETIME,
     RECRUIT_FORWARD_OFFSET,
-    UNIT_VISION_RADIUS,
     Game,
     dist,
 )
@@ -25,7 +26,7 @@ class KingGuardCombatTests(unittest.TestCase):
         guard.home_position = (x, y)
         return guard
 
-    def test_king_is_immobile_and_attacks_on_exact_cadence(self):
+    def test_king_attacks_on_exact_cadence(self):
         king = self.game.add_unit("king", "green", 10, 10)
         king.home_position = (10, 10)
         enemy = self.game.add_unit("swordsman", "red", 11.5, 10)
@@ -58,11 +59,10 @@ class KingGuardCombatTests(unittest.TestCase):
         self.assertEqual(second.health, second.max_health)
         self.assertEqual(farther.health, farther.max_health)
 
-    def test_guard_acquires_nearest_target_within_normal_vision(self):
+    def test_guard_acquires_nearest_target_within_home_defense_radius(self):
         guard = self.add_guard()
-        farther = self.game.add_unit("swordsman", "red", 22.5, 20)
-        nearest = self.game.add_unit("knight", "red", 21.5, 20)
-        self.assertGreater(UNIT_VISION_RADIUS, GUARD_LEASH_DISTANCE)
+        farther = self.game.add_unit("swordsman", "red", 39, 20)
+        nearest = self.game.add_unit("knight", "red", 35, 20)
 
         self.game.update_unit(guard, 0)
         self.assertIs(guard.target, nearest)
@@ -88,14 +88,14 @@ class KingGuardCombatTests(unittest.TestCase):
             GUARD_LEASH_DISTANCE,
         )
 
-        inside.x = 20 + GUARD_LEASH_DISTANCE + guard.attack_range - .01
-        for _ in range(8):
+        inside.x = 20 + GUARD_LEASH_DISTANCE - .01
+        for _ in range(40):
             self.game.update_unit(guard, .5)
             self.assertLessEqual(
                 dist(guard.home_position, (guard.x, guard.y)),
                 GUARD_LEASH_DISTANCE + 1e-9,
             )
-        self.assertEqual(
+        self.assertLessEqual(
             dist(guard.home_position, (guard.x, guard.y)),
             GUARD_LEASH_DISTANCE,
         )
@@ -105,7 +105,7 @@ class KingGuardCombatTests(unittest.TestCase):
         guard = self.add_guard()
         target = self.game.add_unit("swordsman", "red", 22.5, 20)
         self.game.update_unit(guard, 1)
-        target.x = 20 + GUARD_LEASH_DISTANCE + guard.attack_range + .01
+        target.x = 20 + GUARD_LEASH_DISTANCE + .01
 
         self.game.update_unit(guard, .5)
         self.assertIsNone(guard.target)
@@ -113,6 +113,42 @@ class KingGuardCombatTests(unittest.TestCase):
         self.game.update_unit(guard, 1)
         self.assertEqual((guard.x, guard.y), guard.home_position)
         self.assertIsNone(guard.target_pos)
+
+    def test_king_chases_within_radius_then_returns_home(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        target = self.game.add_unit("swordsman", "red", 35, 20)
+
+        self.game.update_unit(king, 1)
+        self.assertEqual((king.x, king.y), (21, 20))
+        self.assertIs(king.target, target)
+
+        target.x = 20 + GUARD_LEASH_DISTANCE + .01
+        self.game.update_unit(king, 1)
+        self.assertIsNone(king.target)
+        self.assertLess(king.x, 21)
+        self.game.update_unit(king, 1)
+        self.assertEqual((king.x, king.y), king.home_position)
+        self.assertIsNone(king.target_pos)
+
+    def test_arrows_are_resisted_by_kings_and_knights_only(self):
+        archer = self.game.add_unit("archer", "red", 10, 10)
+        king = self.game.add_unit("king", "green", 11, 10)
+        knight = self.game.add_unit("knight", "green", 12, 10)
+
+        self.game.attack(archer, king)
+        archer.attack_timer = 0
+        self.game.attack(archer, knight)
+
+        self.assertEqual(
+            king.health,
+            king.max_health - archer.damage * ARCHER_DAMAGE_VS_KING_MULTIPLIER,
+        )
+        self.assertEqual(
+            knight.health,
+            knight.max_health
+            - archer.damage * ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
+        )
 
     def test_guard_returns_after_target_death_then_reacquires_from_post(self):
         guard = self.add_guard()
@@ -133,7 +169,7 @@ class KingGuardCombatTests(unittest.TestCase):
 
     def test_guard_ignores_player_orders_and_enemy_ai_destinations(self):
         green = self.add_guard("green", 20, 20)
-        red = self.add_guard("red", 30, 20)
+        red = self.add_guard("red", 50, 20)
         green.selected = red.selected = True
         green.target_pos = red.target_pos = (80, 80)
         green.tactical_pos = red.tactical_pos = (70, 70)
