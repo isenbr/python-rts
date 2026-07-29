@@ -42,11 +42,16 @@ or combat target. All movement and waypoints are clamped to the map.
 
 ## Enemy production tuning
 
-Before seeing a player army, enemy recruitment aims to invest one third of its
-army essence in each unit kind. After a sighting, it totals the last-seen
-living player units by their recruitment costs and maps those essence shares
-through the counters: swordsmen produce an archer target, archers a shield
-target, and shields a swordsman target.
+Normal AI attack groups require at least 6,000 essence of purchasable units.
+Composition percentages are percentages of recruitment cost. The initial
+production target is one third of essence per unit kind.
+
+Seeing a player army does not by itself change production. The AI learns a
+counter composition only from a player army that defeats an AI attack wave. A
+player army that loses does not change the current production target. A learned
+composition maps the victorious army's essence shares through the counters:
+swordsmen produce an archer target, archers a shield target, and shields a
+swordsman target.
 
 Each deterministic decision projects the cost of every possible next unit and
 chooses the purchase with the smallest total error from those target essence

@@ -76,132 +76,129 @@ def _observe_army(game, kinds):
 
 
 def simulate_integration_review(seed=73, purchases=60):
-    """Report the six deterministic enemy-AI integration review scenarios."""
-    # 1. With no sightings, spending converges by essence rather than unit count.
-    default_game = Game(enemy_rng=random.Random(seed))
-    default_game.units[:] = [unit for unit in default_game.units if unit.is_king_objective]
-    default_ai = default_game.enemy_ai
-    default_ai._known_red_uids.clear()
-    default_spending = _produce_fixed_sequence(
-        default_ai, default_game, purchases
-    )
+    """Report deterministic loss-gated production scenarios A through D."""
+    neutral = {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS}
 
-    # 2-3. Equal observed archer/shield essence maps to equal shield/sword
-    # counters, then a new swordsman sighting redirects the target to archers.
-    counter_game = Game(enemy_rng=random.Random(seed))
-    counter_game.units[:] = [unit for unit in counter_game.units if unit.is_king_objective]
-    counter_ai = counter_game.enemy_ai
-    counter_ai._known_red_uids.clear()
-    first_players = _observe_army(
-        counter_game, ("archer",) * 3 + ("shield",) * 5
-    )
-    for unit in first_players:
-        unit.x = counter_game.team_king("green").x
-    counter_ai._update_strategic_knowledge()
-    first_observed = counter_ai.last_seen_player_composition()[1]
-    first_target = counter_ai.production_target_shares()
-    first_spending = _produce_fixed_sequence(
-        counter_ai, counter_game, purchases
-    )
-    for unit in first_players:
-        unit.x = counter_game.team_king("red").x - 5
+    def encounter(player_count, red_count):
+        game = Game(enemy_rng=random.Random(seed))
+        game.units[:] = [
+            unit for unit in game.units if unit.is_king_objective
+        ]
+        ai = game.enemy_ai
+        ai._known_red_uids.clear()
+        ai.recruitment_timer = 999
+        reds = [
+            game.add_unit("swordsman", "red", 40, 40 + index * .2)
+            for index in range(red_count)
+        ]
+        players = [
+            game.add_unit("shield", "green", 44, 40 + index * .2)
+            for index in range(player_count)
+        ]
+        ai.squad = {unit.uid for unit in reds}
+        ai.formation_roles = {
+            unit.uid: ai.FORMATION_ROLE_BY_KIND[unit.kind]
+            for unit in reds
+        }
+        ai.wave_start_strength = len(reds)
+        ai.state = AIState.ATTACKING
+        ai._update_strategic_knowledge()
+        ai.combat_opponent_uids = {unit.uid for unit in players}
+        return game, ai, reds, players
+
+    # A: observation followed by a player loss leaves the neutral target intact.
+    loss_game, loss_ai, _, losing_players = encounter(1, 1)
+    observed_target = loss_ai.production_target_shares()
+    for unit in losing_players:
         unit.health = 0
-    counter_ai._update_strategic_knowledge()
-    counter_game.units[:] = [
-        unit for unit in counter_game.units if unit.is_king_objective or unit.team == "green"
+    loss_ai._update_strategic_knowledge()
+    loss_ai._begin_recovery()
+    after_player_loss = loss_ai.production_target_shares()
+
+    # B: a surviving all-shield army causes a casualty retreat and is learned.
+    win_game, win_ai, losing_wave, _ = encounter(1, 2)
+    losing_wave[0].health = 0
+    win_ai.make_decision()
+    learned_target = win_ai.production_target_shares()
+    win_game.units[:] = [
+        unit for unit in win_game.units if unit.is_king_objective
     ]
-    counter_ai._known_red_uids.clear()
-    _observe_army(counter_game, ("swordsman",) * 5)
-    counter_ai._update_strategic_knowledge()
-    changed_observed = counter_ai.last_seen_player_composition()[1]
-    changed_target = counter_ai.production_target_shares()
-    changed_spending = _produce_fixed_sequence(
-        counter_ai, counter_game, purchases
-    )
+    win_ai.squad.clear()
+    win_ai.reserve.clear()
+    win_ai.defenders.clear()
+    win_ai._known_red_uids.clear()
+    learned_spending = _produce_fixed_sequence(win_ai, win_game, purchases)
 
-    # 4-5. A weak rally group is held until counter reinforcements clear the
-    # exact same last-seen-army strength gate.
-    gate = simulate_launch_gate_scenario(seed)
-
-    # 6. Compare deterministic rank ordering at the rally and attack anchors.
-    formation_game = Game(enemy_rng=random.Random(seed))
-    formation_game.units[:] = [unit for unit in formation_game.units if unit.is_king_objective]
-    formation_ai = formation_game.enemy_ai
-    formation_ai._known_red_uids.clear()
-    members = [
-        formation_game.add_unit(kind, "red", 90, 58 + index)
-        for index, kind in enumerate(("shield", "swordsman", "archer"))
+    # C: a fresh weaker assessment retreats and learns before any casualties.
+    retreat_game, retreat_ai, retreat_wave, _ = encounter(8, 1)
+    health_before = sum(unit.health for unit in retreat_wave)
+    retreat_ai.make_decision()
+    health_after = sum(unit.health for unit in retreat_wave)
+    assessment = retreat_ai.latest_combat_assessments[
+        tuple(sorted(retreat_ai.squad))
     ]
-    formation_ai.squad = {unit.uid for unit in members}
-    formation_ai.formation_roles = {
-        unit.uid: formation_ai.FORMATION_ROLE_BY_KIND[unit.kind]
-        for unit in members
-    }
 
-    def rank_order(anchor):
-        destinations = {
-            unit.kind: formation_ai._formation_destination(
-                unit, members, anchor=anchor
-            )
-            for unit in members
-        }
-        # Red advances toward decreasing x, so the lowest x is the front rank.
-        return {
-            "front_to_back": sorted(
-                destinations, key=lambda kind: destinations[kind][0]
-            ),
-            "destinations": {
-                kind: [round(value, 3) for value in destinations[kind]]
-                for kind in UNIT_KINDS
-            },
-        }
+    # D: the normal launch gate holds below its essence target and records a
+    # cost-valid launch once another purchasable unit reaches the threshold.
+    gate_game = Game(enemy_rng=random.Random(seed))
+    gate_game.units[:] = [
+        unit for unit in gate_game.units if unit.is_king_objective
+    ]
+    gate_ai = gate_game.enemy_ai
+    gate_ai._known_red_uids.clear()
+    gate_ai.recruitment_timer = 999
+    sword_cost = UNIT_COSTS["swordsman"]
+    below_count = (gate_ai.TARGET_GROUP_ESSENCE - 1) // sword_cost
+    gate_members = [
+        gate_game.add_unit("swordsman", "red", 90, 40 + index * .1)
+        for index in range(below_count)
+    ]
+    gate_ai.state = AIState.RALLYING
+    gate_ai._assign_available_units()
+    for unit in gate_members:
+        unit.x, unit.y = gate_ai._formation_destination(unit)
+    gate_ai.make_decision()
+    below_gate = gate_ai.last_launch_gate.copy()
+    launched_below = bool(gate_ai.wave_history)
+    added = gate_game.add_unit("swordsman", "red", 90, 45)
+    gate_members.append(added)
+    gate_ai._assign_available_units()
+    for unit in gate_members:
+        unit.x, unit.y = gate_ai._formation_destination(unit)
+    gate_ai.make_decision()
+    launched_wave = gate_ai.wave_history[-1]
 
-    observed_counts, _ = counter_ai.last_seen_player_composition()
     return {
         "seed": seed,
         "production_samples": purchases,
-        "no_player_information": {
-            "observed_player_essence_shares": {
-                kind: 0.0 for kind in UNIT_KINDS
-            },
-            "desired_ai_counter_shares": {
-                kind: round(1 / len(UNIT_KINDS), 4)
-                for kind in UNIT_KINDS
-            },
-            "actual_ai_spending_shares": _shares(default_spending),
+        "scenario_a_player_loses": {
+            "player_composition": {"shield": "100%"},
+            "target_after_observation": observed_target,
+            "target_after_player_loss": after_player_loss,
+            "remained_neutral": (
+                observed_target == neutral and after_player_loss == neutral
+            ),
         },
-        "equal_archer_shield_essence": {
-            "observed_player_essence_shares": _shares(first_observed),
-            "desired_ai_counter_shares": {
-                kind: round(first_target[kind], 4) for kind in UNIT_KINDS
-            },
-            "actual_ai_spending_shares": _shares(first_spending),
+        "scenario_b_player_wins": {
+            "player_composition": {"shield": "100%"},
+            "ai_state": win_ai.state.name,
+            "target_after_ai_defeat": learned_target,
+            "subsequent_spending_shares": _shares(learned_spending),
         },
-        "new_sighting": {
-            "observed_player_counts": observed_counts,
-            "observed_player_essence_shares": _shares(changed_observed),
-            "desired_ai_counter_shares": {
-                kind: round(changed_target[kind], 4) for kind in UNIT_KINDS
-            },
-            "actual_ai_spending_shares": _shares(changed_spending),
+        "scenario_c_weaker_retreat": {
+            "player_composition": {"shield": "100%"},
+            "assessment": assessment.classification.name,
+            "assessment_stale": assessment.stale,
+            "ai_state": retreat_ai.state.name,
+            "casualties": health_before - health_after,
+            "target_before_rebuild": retreat_ai.production_target_shares(),
         },
-        "launch_gate": {
-            "held": {
-                "strength_ratio": round(gate["held"]["ratio"], 4),
-                "decision": gate["held"]["decision"],
-            },
-            "after_counter_production": {
-                "strength_ratio": round(gate["permitted"]["ratio"], 4),
-                "decision": gate["permitted"]["decision"],
-            },
-            "wave_composition": gate["wave_composition"],
-        },
-        "formation_rank_ordering": {
-            "rally": rank_order(formation_ai.rally_point),
-            "advance": rank_order((
-                formation_game.team_king("green").x,
-                formation_game.team_king("green").y,
-            )),
+        "scenario_d_launch_gate": {
+            "target_essence": gate_ai.TARGET_GROUP_ESSENCE,
+            "below_target_essence": below_gate["squad_essence"],
+            "below_target_decision": below_gate["decision"],
+            "launched_below_target": launched_below,
+            "launched_wave_essence": launched_wave["squad_essence"],
         },
     }
 
@@ -234,7 +231,7 @@ def simulate_launch_gate_scenario(seed=73):
     held = ai.last_launch_gate.copy()
     red.extend(
         game.add_unit("shield", "red", 90, 50 + index)
-        for index in range(6)
+        for index in range(18)
     )
     ai.make_decision()
     for unit in red:

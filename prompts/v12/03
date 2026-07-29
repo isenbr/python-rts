@@ -1,0 +1,69 @@
+Continue from the previous stage.
+
+Change enemy production adaptation so merely seeing a player composition does
+not change the AI's strategic production target.
+
+Desired rule:
+
+1. Production begins with neutral target shares:
+   one-third swordsman, one-third archer, and one-third shield, measured by
+   essence cost.
+2. The AI may observe and remember player units for combat, targeting, fog of
+   war, and strength evaluation, but those sightings alone must not change
+   production_target_shares().
+3. Change the strategic production composition only after the player army wins
+   an encounter against an AI attack wave. Adaptation occurs when the AI wave:
+   - enters recovery after combat losses or its casualty-retreat threshold; or
+   - receives a fresh, non-stale combat-strength assessment showing that the
+     encountered player army is stronger, retreats, and enters recovery.
+   A retreat caused by a fresh weaker assessment counts as an AI loss even if
+   neither army has taken casualties.
+4. Snapshot the relevant living player army's composition at the resolved
+   encounter boundary. Store essence invested per kind, not just unit counts.
+5. Convert that victorious player composition through the existing counters:
+   - player swordsman cost share -> AI archer target share;
+   - player archer cost share -> AI shield target share;
+   - player shield cost share -> AI swordsman target share.
+6. Preserve the last learned target until a later AI defeat supplies a new
+   victorious-player composition.
+7. If the player army loses, is eliminated, or the AI wave wins or continues,
+   do not change the learned production target.
+8. Do not treat unrelated events such as defense recalls, unreachable
+   objectives, game shutdown, non-attack scouting, or missing or stale evidence
+   as proof that the player army won. A retreat may teach a composition only
+   when the assessment is fresh and identifies the observed player army that
+   caused the retreat.
+9. Keep tactical knowledge separate from the learned production target. Use
+   explicit state names such as learned_counter_essence or
+   victorious_player_composition so the distinction is clear.
+10. Production percentages must always mean percentages of essence cost.
+
+Add deterministic tests covering at least:
+
+- Observing a 100%-shield player army leaves production targets at one third
+  each.
+- If that shield army loses to the AI, targets remain one third each.
+- If that shield army defeats the AI wave, the new target becomes 100%
+  swordsmen.
+- An AI wave that encounters a larger 100%-shield player army, receives a
+  fresh weaker assessment, and retreats without casualties learns a 100%
+  swordsman target before rebuilding.
+- A victorious 50/50-by-cost player mixture produces the corresponding 50/50
+  counter target even when the unit counts are unequal.
+- A retreat based on stale or missing strength evidence does not teach a new
+  composition.
+- Retreat or recovery caused solely by a non-combat hard-safety condition does
+  not teach a new composition.
+- A later sighting does not overwrite the learned target before another
+  confirmed AI defeat.
+- A later confirmed defeat replaces the previous learned target exactly once.
+- Empty or invalid encounter snapshots do not cause division by zero or erase
+  the existing target.
+
+Checks:
+- Run all enemy-production tests.
+- Run combat-state-transition and wave-recovery tests.
+- Inspect production_history to confirm target_shares changes only after a
+  confirmed AI loss.
+- Run the complete test suite.
+- Do not commit changes.

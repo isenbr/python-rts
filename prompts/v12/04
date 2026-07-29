@@ -1,0 +1,50 @@
+Continue from the previous stage.
+
+Finish and verify the 6,000-essence wave and loss-gated production changes.
+
+Update README.md's Enemy production tuning section to state:
+
+- Normal AI attack groups require at least 6,000 essence of purchasable units.
+- Composition percentages are percentages of recruitment cost.
+- The initial production target is one third of essence per unit kind.
+- Seeing a player army does not by itself change production.
+- The AI learns a counter composition only from a player army that defeats an
+  AI attack wave.
+- A player army that loses does not change the current production target.
+
+Update simulate_enemy_ai.py or add an equivalent deterministic integration
+scenario which demonstrates:
+
+Scenario A:
+- The player fields a 100%-shield army.
+- The AI observes it.
+- The player army loses.
+- The AI target remains one third for every unit kind.
+
+Scenario B:
+- A 100%-shield player army defeats an AI wave.
+- The AI target changes to 100% swordsmen.
+- Subsequent AI spending converges toward swordsmen by essence.
+
+Scenario C:
+- An AI wave sees a larger 100%-shield player army.
+- A fresh combat-strength assessment classifies the AI wave as weaker.
+- The AI retreats without taking casualties.
+- The AI target changes to 100% swordsmen before it rebuilds.
+
+Scenario D:
+- No normal AI wave launches below 6,000 essence.
+- The recorded launched-wave essence is at least 6,000.
+
+Use UNIT_COSTS for every calculation. Do not duplicate cost values in tests or
+simulation logic.
+
+Checks:
+- Run the deterministic integration scenarios and inspect their structured
+  output.
+- Run the entire test suite.
+- Run a syntax or compile check over main.py, simulation scripts, and tests.
+- Search the repository for outdated documentation or assertions that say a
+  sighting immediately changes production.
+- Report the exact commands run and their results.
+- Do not commit changes.

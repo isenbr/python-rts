@@ -1,0 +1,46 @@
+Continue from the previous stage.
+
+Change EnemyAI attack-group sizing from a minimum unit-count rule to an
+essence-cost rule.
+
+Requirements:
+
+1. Introduce a clearly named EnemyAI constant such as:
+   TARGET_GROUP_ESSENCE = 6000
+2. Add one reusable helper that totals the recruitment cost of living,
+   purchasable units in a proposed group using UNIT_COSTS.
+3. A normal AI attack wave must not launch until its squad contains at least
+   6,000 essence of units.
+4. Apply the cost rule consistently in:
+   - wave assembly;
+   - reserve allocation;
+   - bootstrap launch readiness;
+   - launch-gate diagnostics;
+   - timeout behavior.
+5. MAX_RALLY_WAIT must not allow an under-6,000-essence normal wave to bypass
+   the requirement.
+6. If a last-seen opponent requires a stronger army, the existing strength gate
+   may cause the AI to wait beyond 6,000 essence.
+7. Preserve defensive recalls and emergency defense behavior; those are not
+   normal attack-wave launches.
+8. Record the squad's total essence in wave_history and launch-gate diagnostics
+   so the behavior can be inspected.
+9. Avoid treating kings or non-purchasable units as part of group cost.
+
+Update or replace count-based tests. Add tests proving:
+
+- Many cheap units totaling less than 6,000 do not launch.
+- A mixed group totaling exactly 6,000 can launch when formed and otherwise
+  eligible.
+- A group above 6,000 can launch.
+- Rally timeout cannot launch a group below 6,000.
+- Reserve selection does not prevent an otherwise available 6,000-essence
+  wave from being assembled.
+- wave_history reports the correct essence total.
+
+Checks:
+- Run the focused wave-assembly and launch-gate tests.
+- Search for remaining uses of MIN_SQUAD_STRENGTH and determine whether each
+  should be converted, retained for a separate tactical purpose, or removed.
+- Run the complete test suite.
+- Do not commit changes.

@@ -570,7 +570,7 @@ class EnemyAI:
     TACTICAL_RECHECK = .45
     RALLY_LEASH = 5.0
     RALLY_DISTANCE = 8.0
-    MIN_SQUAD_STRENGTH = 4
+    TARGET_GROUP_ESSENCE = 6000
     MAX_RALLY_WAIT = 18.0
     FORMATION_TOLERANCE = 3.0
     FORMATION_READY_FRACTION = .6
@@ -604,6 +604,7 @@ class EnemyAI:
     SCOUTING_RADIUS = 10.0
     KING_VISION_RADIUS = 16.0
     MIN_FRONTLINE = 2
+    MISSING_BACKLINE_MIN_ARMY_SIZE = 4
     FRONTLINE_RATIO = .5
     SCORE_HYSTERESIS = 8.0
     LOSS_MEMORY_DURATION = 24.0
@@ -727,6 +728,9 @@ class EnemyAI:
         self.player_knowledge: dict[int, tuple[str, float]] = {}
         self.combat_observations: dict[int, ObservedCombatUnit] = {}
         self.last_seen_player_army: dict[int, LastSeenPlayerUnit] = {}
+        # Tactical sightings remain independent from the strategic composition
+        # learned only when a player army defeats an attack wave.
+        self.learned_counter_essence: Optional[dict[str, int]] = None
         self.combat_observation_revision = 0
         self._currently_observed_player_uids: set[int] = set()
         self.combat_evaluator = CombatStrengthEvaluator()
@@ -777,6 +781,14 @@ class EnemyAI:
         by_uid = {unit.uid: unit for unit in self._living_red_units()}
         return [by_uid[uid] for uid in sorted(self.squad) if uid in by_uid]
 
+    def _group_essence(self, units):
+        """Return recruitment cost of living, purchasable units in a group."""
+        return sum(
+            UNIT_COSTS[unit.kind]
+            for unit in units
+            if unit.health > 0 and unit.kind in PURCHASABLE_UNIT_KINDS
+        )
+
     def _cleanup_squad(self):
         living = {unit.uid for unit in self._living_red_units()}
         self.squad.intersection_update(living)
@@ -820,15 +832,27 @@ class EnemyAI:
         ))
 
     def _assign_available_units(self):
+        living_units = self._living_red_units()
+        # A home reserve may never strand enough purchasable essence to form a
+        # normal attack wave. Release reserved units until the proposed squad
+        # can reach the target.
+        while (
+            self.reserve
+            and self._group_essence(
+                unit for unit in living_units if unit.uid not in self.reserve
+            ) < self.TARGET_GROUP_ESSENCE
+        ):
+            self.reserve.remove(min(self.reserve))
         available = [
-            unit for unit in self._living_red_units()
+            unit for unit in living_units
             if unit.uid not in self.squad and unit.uid not in self.reserve
         ]
-        # Keep a small home guard once there are enough troops to form a full wave.
-        desired_reserve = min(
-            self.DEFENSIVE_RESERVE_SIZE,
-            max(0, len(self._living_red_units()) - self.MIN_SQUAD_STRENGTH),
-        )
+        proposed = [
+            unit for unit in living_units
+            if unit.uid in self.squad or unit.uid not in self.reserve
+        ]
+        # Keep a small home guard only when its cost cannot prevent a full wave.
+        desired_reserve = self.DEFENSIVE_RESERVE_SIZE
         reserve_needed = max(0, desired_reserve - len(self.reserve))
         king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
         reserve_candidates = list(available)
@@ -840,15 +864,25 @@ class EnemyAI:
             if not reserve_candidates:
                 break
             unit = min(
-                reserve_candidates,
+                (
+                    candidate for candidate in reserve_candidates
+                    if self._group_essence(
+                        member for member in proposed
+                        if member.uid != candidate.uid
+                    ) >= self.TARGET_GROUP_ESSENCE
+                ),
                 key=lambda member: (
                     member.kind == "shield" if reserve_has_shield
                     else member.kind != "shield",
                     dist((member.x, member.y), king_pos),
                     member.uid,
                 ),
+                default=None,
             )
+            if unit is None:
+                break
             reserve_candidates.remove(unit)
+            proposed.remove(unit)
             self.reserve.add(unit.uid)
             reserve_has_shield |= unit.kind == "shield"
             unit.target = None
@@ -1295,7 +1329,7 @@ class EnemyAI:
         )
         if frontline >= required_frontline:
             scores["archer"] += self.PROTECTED_ARCHER_BONUS
-            if total >= self.MIN_SQUAD_STRENGTH and own["archer"] == 0:
+            if total >= self.MISSING_BACKLINE_MIN_ARMY_SIZE and own["archer"] == 0:
                 scores["archer"] += self.MISSING_BACKLINE_BONUS
         else:
             scores["archer"] -= self.UNPROTECTED_ARCHER_PENALTY
@@ -1340,18 +1374,22 @@ class EnemyAI:
         return invested
 
     def production_target_shares(self):
-        """Map last-seen player essence into deterministic counter shares."""
-        if not self.last_seen_player_army:
+        """Return strategic counter shares, always measured by essence cost."""
+        if not self.learned_counter_essence:
             return {
                 kind: 1 / len(ENEMY_PRODUCTION_KINDS)
                 for kind in ENEMY_PRODUCTION_KINDS
             }
-        _, player_essence = self.last_seen_player_composition()
-        total = sum(player_essence.values())
-        shares = {kind: 0.0 for kind in ENEMY_PRODUCTION_KINDS}
-        for player_kind, contribution in player_essence.items():
-            shares[self.PRODUCTION_COUNTERS[player_kind]] += contribution / total
-        return shares
+        total = sum(self.learned_counter_essence.values())
+        if total <= 0:
+            return {
+                kind: 1 / len(ENEMY_PRODUCTION_KINDS)
+                for kind in ENEMY_PRODUCTION_KINDS
+            }
+        return {
+            kind: self.learned_counter_essence.get(kind, 0) / total
+            for kind in ENEMY_PRODUCTION_KINDS
+        }
 
     def _production_balance(self):
         """Describe current spending against the strategic essence target."""
@@ -1557,6 +1595,8 @@ class EnemyAI:
         members = tuple(self._squad_units())
         if not members:
             return False
+        squad_essence = self._group_essence(members)
+        cost_ready = squad_essence >= self.TARGET_GROUP_ESSENCE
         if not self.last_seen_player_army:
             assessment = self.combat_evaluator.assess(
                 members,
@@ -1569,14 +1609,15 @@ class EnemyAI:
                 "own_strength": assessment.own_strength,
                 "opponent_strength": assessment.opponent_strength,
                 "ratio": assessment.advantage_ratio,
+                "squad_essence": squad_essence,
                 "decision": (
                     "bootstrap_ready"
-                    if len(members) >= self.MIN_SQUAD_STRENGTH
+                    if cost_ready
                     else "bootstrap_wait"
                 ),
                 "observation_revision": self.combat_observation_revision,
             }
-            passed = len(members) >= self.MIN_SQUAD_STRENGTH
+            passed = cost_ready
         else:
             opponents = tuple(
                 ObservedCombatUnit(
@@ -1596,7 +1637,7 @@ class EnemyAI:
                 self.elapsed,
                 self.combat_observation_revision,
             )
-            passed = (
+            passed = cost_ready and (
                 assessment.advantage_ratio
                 >= self.combat_evaluator.STRONGER_RATIO
             )
@@ -1605,7 +1646,12 @@ class EnemyAI:
                 "own_strength": assessment.own_strength,
                 "opponent_strength": assessment.opponent_strength,
                 "ratio": assessment.advantage_ratio,
-                "decision": "strength_pass" if passed else "strength_hold",
+                "squad_essence": squad_essence,
+                "decision": (
+                    "essence_wait" if not cost_ready
+                    else "strength_pass" if passed
+                    else "strength_hold"
+                ),
                 "observation_revision": self.combat_observation_revision,
             }
         signature = (
@@ -1637,6 +1683,7 @@ class EnemyAI:
             "launched_at": self.elapsed,
             "wait": self.rally_elapsed,
             "composition": composition,
+            "squad_essence": self._group_essence(members),
             "launch_gate": self.last_launch_gate.copy()
             if self.last_launch_gate else None,
         })
@@ -1685,8 +1732,60 @@ class EnemyAI:
                     unit, members, anchor=objective
                 )
 
-    def _begin_recovery(self):
+    def _victorious_player_composition(self, opponent_uids):
+        """Snapshot the currently observed, living encounter army by cost."""
+        opponent_uids = set(opponent_uids)
+        if not opponent_uids or not opponent_uids <= self._currently_observed_player_uids:
+            return None
+        living_players = {
+            unit.uid: unit
+            for unit in self.game.units
+            if unit.is_player_commandable and unit.health > 0
+        }
+        if not opponent_uids <= set(living_players):
+            return None
+        essence = {kind: 0 for kind in ENEMY_PRODUCTION_KINDS}
+        for uid in sorted(opponent_uids):
+            unit = living_players[uid]
+            if unit.kind not in essence:
+                return None
+            essence[unit.kind] += UNIT_COSTS[unit.kind]
+        return essence if sum(essence.values()) > 0 else None
+
+    def _fresh_victorious_player_composition(self, assessment):
+        """Return a snapshot only when fresh evidence identifies the victor."""
+        if (
+            assessment is None
+            or assessment.stale
+            or assessment.advantage_ratio > self.COMBAT_RETREAT_RATIO
+            or self.elapsed - assessment.evaluated_at
+            > self.combat_evaluator.PERIODIC_REFRESH
+        ):
+            return None
+        return self._victorious_player_composition(assessment.opponent_uids)
+
+    def _learn_victorious_player_composition(self, player_essence):
+        """Replace the strategic counter target from one confirmed AI defeat."""
+        if not player_essence:
+            return False
+        total = sum(
+            amount for kind, amount in player_essence.items()
+            if kind in self.PRODUCTION_COUNTERS and amount > 0
+        )
+        if total <= 0:
+            return False
+        learned = {kind: 0 for kind in ENEMY_PRODUCTION_KINDS}
+        for player_kind, contribution in player_essence.items():
+            if player_kind in self.PRODUCTION_COUNTERS and contribution > 0:
+                learned[self.PRODUCTION_COUNTERS[player_kind]] += contribution
+        self.learned_counter_essence = learned
+        return True
+
+    def _begin_recovery(self, victorious_player_composition=None):
         self._cleanup_squad()
+        self._learn_victorious_player_composition(
+            victorious_player_composition
+        )
         if self.wave_start_strength and len(self._squad_units()) < self.wave_start_strength:
             self.failed_waves += 1
         self.transition_to(AIState.RECOVERING)
@@ -2080,17 +2179,9 @@ class EnemyAI:
                     and (self._formation_ready() or timed_out)
                 )
             else:
-                # Bootstrap preserves the legacy rule: form a minimum-sized
-                # wave, or eventually send the available scouts on timeout.
-                launch_ready = (
-                    len(self.squad) >= self.MIN_SQUAD_STRENGTH
-                    and self._formation_ready()
-                ) or timed_out
-                if launch_ready and not strength_gate_passed:
-                    self.last_launch_gate["decision"] = "bootstrap_timeout"
-                    self.launch_gate_history.append(
-                        self.last_launch_gate.copy()
-                    )
+                launch_ready = strength_gate_passed and (
+                    self._formation_ready() or timed_out
+                )
             if self.squad and launch_ready:
                 self._launch_wave()
         elif self.state == AIState.ATTACKING:
@@ -2101,6 +2192,10 @@ class EnemyAI:
             casualty_retreat = (
                 loss_fraction >= self.RECOVERY_LOSS_FRACTION
             )
+            casualty_victor = (
+                self._victorious_player_composition(self.combat_opponent_uids)
+                if losses > 0 else None
+            )
             # Decision precedence:
             # 1. Hard safety always ends the attack.
             # 2. Only a fresh advantage above CASUALTY_ADVANTAGE_MARGIN can
@@ -2109,16 +2204,24 @@ class EnemyAI:
             # 4. Uncertain, missing, or stale evidence falls back to retreat
             #    when casualties have already made retreat necessary.
             if hard_safety_reason is not None:
-                self._begin_recovery()
+                # A wiped-out wave can resolve a real encounter. Other hard
+                # safety exits (such as an unreachable objective) cannot.
+                self._begin_recovery(
+                    casualty_victor
+                    if hard_safety_reason == "no_viable_combat_units"
+                    else None
+                )
             elif self._can_finish_objective(field_assessment):
                 self._advance_wave()
             elif casualty_retreat:
                 if self._casualty_retreat_is_overridden(field_assessment):
                     self._advance_wave()
                 else:
-                    self._begin_recovery()
+                    self._begin_recovery(casualty_victor)
             elif self._strength_decision(field_assessment) == "retreat":
-                self._begin_recovery()
+                self._begin_recovery(
+                    self._fresh_victorious_player_composition(field_assessment)
+                )
             else:
                 self._advance_wave()
         elif self.state == AIState.RECOVERING:

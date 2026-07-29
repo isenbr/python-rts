@@ -1,0 +1,31 @@
+Inspect /work/main.py and the existing tests without changing gameplay yet.
+
+Focus on:
+
+- EnemyAI wave assembly and launch logic in main.py, especially:
+  MIN_SQUAD_STRENGTH, _assign_available_units(), _launch_strength_gate(),
+  _launch_wave(), _begin_recovery(), and make_decision().
+- Enemy production targeting, especially:
+  last_seen_player_composition(), production_target_shares(),
+  production_essence_investment(), and choose_production().
+- Existing tests in tests/test_main.py and related combat-transition tests.
+
+Add focused characterization tests that demonstrate the current behavior:
+
+1. Attack readiness is currently based partly on unit count rather than 6,000
+   essence of squad cost.
+2. Merely observing a player army currently changes production_target_shares().
+3. A player army containing only shields currently produces a 100% swordsman
+   counter target immediately after observation.
+4. Neutral production targets one third of invested essence in swordsmen,
+   archers, and shields.
+
+Do not change gameplay behavior in this step. Keep tests deterministic and use
+UNIT_COSTS when calculating essence.
+
+Checks:
+- Run the newly added focused tests.
+- Run the complete test suite.
+- Clearly report which characterization tests describe behavior that later
+  prompts are expected to replace.
+- Do not commit changes.

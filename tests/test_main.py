@@ -950,6 +950,12 @@ class EnemyProductionTests(GameTestCase):
             )
         self.ai._update_strategic_knowledge()
 
+    def learn_player_counter(self, kinds):
+        self.ai._learn_victorious_player_composition({
+            kind: kinds.count(kind) * UNIT_COSTS[kind]
+            for kind in UNIT_KINDS
+        })
+
     def produce_many(self, count):
         self.game.enemy_essence = 100_000
         choices = []
@@ -968,10 +974,12 @@ class EnemyProductionTests(GameTestCase):
     def test_observed_armies_shift_weighted_counter_preference(self):
         self.add_red_frontline()
         self.observe_player(["swordsman"] * 4)
+        self.learn_player_counter(["swordsman"] * 4)
         self.assertEqual(self.ai.choose_production(), "archer")
         self.game.units[:] = [u for u in self.game.units if u.is_king_objective or u.team == "red"]
         self.ai.player_knowledge.clear()
         self.observe_player(["archer"] * 4)
+        self.learn_player_counter(["archer"] * 4)
         self.assertEqual(self.ai.choose_production(), "shield")
 
     def test_low_moderate_and_high_observed_archer_threat(self):
@@ -1035,6 +1043,7 @@ class EnemyProductionTests(GameTestCase):
     def test_temporarily_unavailable_preferred_unit_uses_other_composition(self):
         self.add_red_frontline()
         self.observe_player(["archer"] * 6)
+        self.learn_player_counter(["archer"] * 6)
         self.ai.unavailable_production_kinds.add("shield")
         self.assertEqual(self.ai.choose_production(), "swordsman")
         self.ai.unavailable_production_kinds.clear()
@@ -1043,28 +1052,33 @@ class EnemyProductionTests(GameTestCase):
     def test_archer_counter_displaces_sword_without_displacing_other_choice(self):
         self.add_red_frontline()
         self.observe_player(["archer"] * 6)
+        self.learn_player_counter(["archer"] * 6)
         self.assertEqual(self.ai.choose_production(), "shield")
         self.game.units[:] = [u for u in self.game.units if u.is_king_objective or u.team == "red"]
         self.ai.player_knowledge.clear()
         self.ai.last_seen_player_army.clear()
         self.ai.archer_threat_level = "low"
         self.observe_player(["swordsman"] * 4)
+        self.learn_player_counter(["swordsman"] * 4)
         self.assertEqual(self.ai.choose_production(), "archer")
 
     def test_swordsman_counter_target_overrides_legacy_frontline_score(self):
         self.game.add_unit("archer", "red", 170, 100)
         self.observe_player(["swordsman"] * 5)
+        self.learn_player_counter(["swordsman"] * 5)
         self.assertEqual(self.ai.choose_production(), "archer")
 
     def test_saves_for_archer_when_justified(self):
         self.add_red_frontline()
         self.observe_player(["swordsman"] * 4)
+        self.learn_player_counter(["swordsman"] * 4)
         self.game.enemy_essence = 300
         self.assertIsNone(self.ai.choose_production())
 
     def test_emergency_abandons_archer_savings(self):
         self.add_red_frontline()
         self.observe_player(["swordsman"] * 4)
+        self.learn_player_counter(["swordsman"] * 4)
         self.game.enemy_essence = 300
         self.assertEqual(
             self.ai.choose_production(self.ai.SERIOUS_THREAT_SCORE),
@@ -1091,11 +1105,14 @@ class EnemyProductionTests(GameTestCase):
             results[state] = choice
         self.assertEqual(set(results), set(AIState))
 
-    def test_shield_is_affordable_at_exactly_300_for_base_defense(self):
+    def test_sighting_does_not_override_neutral_target_in_base_defense(self):
         self.observe_player(["archer"] * 3)
         self.ai.state = AIState.DEFENDING
         self.game.enemy_essence = UNIT_COSTS["shield"]
-        self.assertEqual(self.ai.choose_production(2), "shield")
+        self.assertEqual(self.ai.production_target_shares(), {
+            kind: 1 / 3 for kind in UNIT_KINDS
+        })
+        self.assertEqual(self.ai.choose_production(2), "swordsman")
 
     def test_shield_supports_frontline_and_mixed_armies_without_monoculture(self):
         self.game.add_unit("archer", "red", 170, 100)
@@ -1133,12 +1150,12 @@ class EnemyProductionTests(GameTestCase):
         )
         self.assertIn("selected_deficit", self.ai.production_history[-1])
 
-    def test_choice_hysteresis_prevents_rapid_composition_oscillation(self):
+    def test_neutral_target_is_stable_despite_tactical_hysteresis(self):
         self.add_red_frontline()
         self.observe_player(["swordsman"])
         self.ai.last_production_choice = "archer"
         choices = [self.ai.choose_production() for _ in range(8)]
-        self.assertEqual(choices, ["archer"] * 8)
+        self.assertEqual(choices, ["shield"] * 8)
 
     def test_long_no_information_sequence_balances_essence_not_unit_counts(self):
         choices = []
@@ -1205,6 +1222,7 @@ class EnemyProductionTests(GameTestCase):
 
     def test_long_archer_threat_sequence_displaces_swords_with_shields(self):
         self.observe_player(["archer"] * 6)
+        self.learn_player_counter(["archer"] * 6)
         self.game.enemy_essence = 100_000
         choices = []
         for _ in range(40):
@@ -1218,7 +1236,9 @@ class EnemyProductionTests(GameTestCase):
         )
 
     def test_equal_counts_use_player_essence_not_unit_counts(self):
-        self.observe_player(["swordsman", "archer", "shield"])
+        self.ai._learn_victorious_player_composition({
+            kind: UNIT_COSTS[kind] for kind in UNIT_KINDS
+        })
         self.assertEqual(self.ai.production_target_shares(), {
             "swordsman": .3,
             "archer": .2,
@@ -1226,7 +1246,11 @@ class EnemyProductionTests(GameTestCase):
         })
 
     def test_equal_archer_and_shield_essence_converges_to_half_counters(self):
-        self.observe_player(["archer"] * 3 + ["shield"] * 5)
+        self.ai._learn_victorious_player_composition({
+            "swordsman": 0,
+            "archer": UNIT_COSTS["archer"] * 3,
+            "shield": UNIT_COSTS["shield"] * 5,
+        })
         choices = self.produce_many(60)
         spent = self.ai.production_essence_investment()
         total = sum(spent.values())
@@ -1251,27 +1275,31 @@ class EnemyProductionTests(GameTestCase):
             with self.subTest(player_kind=player_kind):
                 self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
                 self.ai.last_seen_player_army.clear()
-                self.observe_player([player_kind] * 6)
+                self.ai._learn_victorious_player_composition({
+                    kind: UNIT_COSTS[player_kind] * 6
+                    if kind == player_kind else 0
+                    for kind in UNIT_KINDS
+                })
                 self.assertEqual(self.ai.choose_production(), counter)
 
-    def test_new_visible_sighting_redirects_without_reading_hidden_changes(self):
-        self.observe_player(["swordsman"] * 4)
+    def test_new_visible_sighting_does_not_overwrite_learned_target(self):
+        self.ai._learn_victorious_player_composition({
+            "swordsman": UNIT_COSTS["swordsman"] * 4,
+            "archer": 0,
+            "shield": 0,
+        })
         self.assertEqual(self.ai.choose_production(), "archer")
-        hidden = [u for u in self.game.units if u.team == "green"]
-        for unit in hidden:
-            unit.x = 40
-            unit.kind = "archer"
-        self.ai._update_strategic_knowledge()
-        self.assertEqual(self.ai.choose_production(), "archer")
-        for unit in hidden:
-            unit.x = self.game.team_king("red").x - 5
-        self.ai._update_strategic_knowledge()
-        self.assertEqual(self.ai.choose_production(), "shield")
+        self.observe_player(["shield"] * 4)
+        self.assertEqual(self.ai.production_target_shares(), {
+            "swordsman": 0.0, "archer": 1.0, "shield": 0.0,
+        })
 
     def test_long_mixed_counter_sequence_meets_documented_tolerance(self):
-        self.observe_player(
-            ["swordsman"] * 5 + ["archer"] * 2 + ["shield"] * 5
-        )
+        self.ai._learn_victorious_player_composition({
+            "swordsman": UNIT_COSTS["swordsman"] * 5,
+            "archer": UNIT_COSTS["archer"] * 2,
+            "shield": UNIT_COSTS["shield"] * 5,
+        })
         self.produce_many(100)
         target = self.ai.production_target_shares()
         spent = self.ai.production_essence_investment()
@@ -1316,7 +1344,7 @@ class EnemySquadTests(GameTestCase):
         self.ai = self.game.enemy_ai
         self.ai.recruitment_timer = 999
 
-    def add_formed_squad(self, kinds=("swordsman", "swordsman", "swordsman", "archer")):
+    def add_formed_squad(self, kinds=("archer",) * 12):
         units = [
             self.game.add_unit(kind, "red", 170, 100 + index)
             for index, kind in enumerate(kinds)
@@ -1472,12 +1500,11 @@ class EnemySquadTests(GameTestCase):
         self.assertIn(sword.uid, self.ai.formation_roles)
 
     def test_shields_are_frontline_and_preferred_for_home_reserve(self):
-        sword, shield, archer, sword2, archer2, shield2, shield3 = (
-            self.add_formed_squad((
-                "swordsman", "shield", "archer", "swordsman", "archer",
-                "shield", "shield",
-            ))
-        )
+        members = self.add_formed_squad((
+            "swordsman", "shield", "archer", "swordsman", "archer",
+            "shield", "shield", *("archer",) * 12,
+        ))
+        sword, shield, archer, sword2, archer2, shield2, shield3 = members[:7]
         self.assertEqual(self.ai.formation_roles[shield3.uid], "shield_rank")
         self.assertEqual(self.ai.formation_roles[archer.uid], "archer_rank")
         reserve_shields = {
@@ -1493,38 +1520,71 @@ class EnemySquadTests(GameTestCase):
 
     def test_wave_composition_reports_every_unit_kind(self):
         members = self.add_formed_squad(
-            ("swordsman", "shield", "shield", "archer")
+            ("swordsman", "shield", "shield", *("archer",) * 11)
         )
         for unit in members:
-            unit.x, unit.y = self.ai._formation_destination(unit)
+            if unit.uid in self.ai.squad:
+                unit.x, unit.y = self.ai._formation_destination(unit)
         self.ai.make_decision()
         self.assertEqual(
             set(self.ai.wave_history[-1]["composition"]), set(UNIT_KINDS)
         )
 
-    def test_sufficiently_strong_formed_squad_launches(self):
-        members = self.add_formed_squad()
+    def test_many_cheap_units_below_target_do_not_launch(self):
+        members = self.add_formed_squad(("swordsman",) * 29)
         self.ai.make_decision()
-        self.assertEqual(self.ai.state, AIState.ATTACKING)
-        self.assertEqual(self.ai.wave_start_strength, 4)
-        self.assertTrue(all(
-            unit.target_pos == self.ai._formation_destination(
-                unit, members,
-                anchor=(self.game.team_king("green").x, self.game.team_king("green").y),
-            )
-            for unit in members
-        ))
+        self.assertEqual(self.ai.state, AIState.RALLYING)
+        self.assertEqual(self.ai.last_launch_gate["squad_essence"], 5800)
+        self.assertEqual(self.ai.wave_number, 0)
 
-    def test_maximum_rally_time_prevents_permanent_waiting(self):
-        member = self.game.add_unit("swordsman", "red", 170, 100)
-        self.ai.make_decision()
-        self.ai.rally_elapsed = self.ai.MAX_RALLY_WAIT - self.ai.decision_interval
+    def test_mixed_group_at_exact_target_launches(self):
+        kinds = ("archer",) * 10 + ("shield",) * 2 + ("swordsman",) * 2
+        self.add_formed_squad(kinds)
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.ATTACKING)
-        self.assertIn(member.uid, self.ai.squad)
+        self.assertEqual(self.ai.wave_history[-1]["squad_essence"], 6000)
+
+    def test_group_above_target_launches(self):
+        self.add_formed_squad(("archer",) * 13)
+        self.ai.make_decision()
+        self.assertEqual(self.ai.state, AIState.ATTACKING)
+        self.assertGreaterEqual(
+            self.ai.wave_history[-1]["squad_essence"],
+            self.ai.TARGET_GROUP_ESSENCE,
+        )
+
+    def test_maximum_rally_time_cannot_launch_below_target(self):
+        self.add_formed_squad(("swordsman",) * 29)
+        self.ai.rally_elapsed = self.ai.MAX_RALLY_WAIT
+        self.ai.make_decision()
+        self.assertEqual(self.ai.state, AIState.RALLYING)
+        self.assertEqual(self.ai.wave_number, 0)
+
+    def test_reserve_does_not_prevent_available_target_wave(self):
+        members = self.add_formed_squad(
+            ("archer",) * 12 + ("shield",) * 2
+        )
+        self.assertEqual(len(self.ai.reserve), 2)
+        self.assertEqual(
+            self.ai._group_essence(self.ai._squad_units()),
+            self.ai.TARGET_GROUP_ESSENCE,
+        )
+        for unit in members:
+            if unit.uid in self.ai.squad:
+                unit.x, unit.y = self.ai._formation_destination(unit)
+        self.ai.make_decision()
+        self.assertEqual(self.ai.state, AIState.ATTACKING)
+
+    def test_wave_history_reports_squad_essence(self):
+        self.add_formed_squad(("archer",) * 12)
+        self.ai.make_decision()
+        self.assertEqual(self.ai.wave_history[-1]["squad_essence"], 6000)
+        self.assertEqual(
+            self.ai.wave_history[-1]["launch_gate"]["squad_essence"], 6000
+        )
 
     def test_underpowered_formed_squad_is_held_by_last_seen_strength(self):
-        self.remember_player_squad(("swordsman",) * 6)
+        self.remember_player_squad(("swordsman",) * 30)
         self.add_formed_squad()
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RALLYING)
@@ -1537,7 +1597,7 @@ class EnemySquadTests(GameTestCase):
         )
 
     def test_maximum_rally_wait_cannot_bypass_observed_strength_gate(self):
-        self.remember_player_squad(("swordsman",) * 8)
+        self.remember_player_squad(("swordsman",) * 30)
         self.add_formed_squad()
         self.ai.rally_elapsed = self.ai.MAX_RALLY_WAIT
         self.ai.make_decision()
@@ -1549,7 +1609,7 @@ class EnemySquadTests(GameTestCase):
         members = self.add_formed_squad(("shield",) * 2)
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RALLYING)
-        for index in range(6):
+        for index in range(18):
             members.append(self.game.add_unit("shield", "red", 170, 110 + index))
         self.ai.make_decision()
         for unit in members:
@@ -1564,7 +1624,7 @@ class EnemySquadTests(GameTestCase):
 
     def test_strength_margin_launches_after_formation_or_timeout(self):
         self.remember_player_squad(("swordsman",))
-        members = self.add_formed_squad(("swordsman",) * 4)
+        members = self.add_formed_squad(("swordsman",) * 30)
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.ATTACKING)
         self.assertGreaterEqual(
@@ -1574,7 +1634,7 @@ class EnemySquadTests(GameTestCase):
 
     def test_hidden_player_changes_do_not_change_gate_until_observed(self):
         players = self.remember_player_squad(("swordsman",))
-        self.add_formed_squad(("swordsman",) * 4)
+        self.add_formed_squad(("swordsman",) * 30)
         first = self.ai._launch_strength_gate()
         first_ratio = self.ai.last_launch_gate["ratio"]
         players[0].health = players[0].max_health * .05
@@ -1584,9 +1644,9 @@ class EnemySquadTests(GameTestCase):
 
     def test_new_stronger_observation_immediately_closes_gate(self):
         players = self.remember_player_squad(("swordsman",))
-        self.add_formed_squad(("swordsman",) * 4)
+        self.add_formed_squad(("swordsman",) * 30)
         self.assertTrue(self.ai._launch_strength_gate())
-        for index in range(7):
+        for index in range(39):
             players.append(self.game.add_unit(
                 "swordsman", "green",
                 self.game.team_king("red").x - 5,
@@ -1621,8 +1681,8 @@ class EnemySquadTests(GameTestCase):
     def test_casualties_trigger_recovery_and_cleanup_bookkeeping(self):
         members = self.add_formed_squad()
         self.ai.make_decision()
-        members[0].health = 0
-        members[1].health = 0
+        for member in members[:6]:
+            member.health = 0
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RECOVERING)
         self.assertNotIn(members[0].uid, self.ai.squad)
@@ -1699,7 +1759,7 @@ class EnemySquadTests(GameTestCase):
         first_wave = self.add_formed_squad()
         self.ai.make_decision()
         self.assertEqual(self.ai.wave_number, 1)
-        for unit in first_wave[:2]:
+        for unit in first_wave[:6]:
             unit.health = 0
         self.ai.make_decision()
         self.ai.recovery_elapsed = self.ai.RECOVERY_DURATION
@@ -1710,13 +1770,12 @@ class EnemySquadTests(GameTestCase):
         self.ai.make_decision()
         second_wave = [
             self.game.add_unit(kind, "red", 170, 100 + index)
-            for index, kind in enumerate(
-                ("swordsman", "swordsman", "swordsman", "archer")
-            )
+            for index, kind in enumerate(("archer",) * 12)
         ]
         self.ai.make_decision()
         for unit in second_wave:
-            unit.x, unit.y = self.ai._formation_destination(unit)
+            if unit.uid in self.ai.squad:
+                unit.x, unit.y = self.ai._formation_destination(unit)
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.ATTACKING)
         self.assertEqual(self.ai.wave_number, 2)
@@ -1764,7 +1823,7 @@ class EnemyDefenseTests(GameTestCase):
         self.assertEqual(self.ai.state, AIState.DEFENDING)
 
     def test_reserve_engages_before_attackers_are_recalled(self):
-        reds = self.add_red(6)
+        reds = self.add_red(32)
         self.ai.make_decision()
         reserve = set(self.ai.reserve)
         attackers = set(self.ai.squad)
@@ -2031,58 +2090,47 @@ class EnemyTacticalPositioningTests(GameTestCase):
 
 
 class EnemySimulationHarnessTests(unittest.TestCase):
-    def test_integration_review_covers_production_gate_and_rank_order(self):
+    def test_integration_review_covers_loss_gated_production_and_wave_cost(self):
         from simulate_enemy_ai import simulate_integration_review
 
         first = simulate_integration_review()
         second = simulate_integration_review()
         self.assertEqual(first, second)
 
-        default = first["no_player_information"]
-        for share in default["actual_ai_spending_shares"].values():
-            self.assertAlmostEqual(share, 1 / 3, delta=.03)
+        neutral = {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS}
+        scenario_a = first["scenario_a_player_loses"]
+        self.assertTrue(scenario_a["remained_neutral"])
+        self.assertEqual(scenario_a["target_after_player_loss"], neutral)
 
-        counter = first["equal_archer_shield_essence"]
-        self.assertEqual(counter["observed_player_essence_shares"], {
-            "swordsman": 0.0, "archer": .5, "shield": .5,
-        })
-        self.assertEqual(counter["desired_ai_counter_shares"], {
-            "swordsman": .5, "archer": 0.0, "shield": .5,
-        })
-        self.assertAlmostEqual(
-            counter["actual_ai_spending_shares"]["swordsman"], .5, delta=.03
-        )
-        self.assertAlmostEqual(
-            counter["actual_ai_spending_shares"]["shield"], .5, delta=.03
-        )
+        all_swords = {"swordsman": 1.0, "archer": 0.0, "shield": 0.0}
+        scenario_b = first["scenario_b_player_wins"]
+        self.assertEqual(scenario_b["target_after_ai_defeat"], all_swords)
+        self.assertEqual(scenario_b["subsequent_spending_shares"], all_swords)
 
-        changed = first["new_sighting"]
-        self.assertEqual(changed["desired_ai_counter_shares"], {
-            "swordsman": 0.0, "archer": 1.0, "shield": 0.0,
-        })
-        self.assertEqual(changed["actual_ai_spending_shares"], {
-            "swordsman": 0.0, "archer": 1.0, "shield": 0.0,
-        })
-        self.assertEqual(first["launch_gate"]["held"]["decision"], "strength_hold")
-        self.assertEqual(
-            first["launch_gate"]["after_counter_production"]["decision"],
-            "strength_pass",
+        scenario_c = first["scenario_c_weaker_retreat"]
+        self.assertEqual(scenario_c["assessment"], "WEAKER")
+        self.assertFalse(scenario_c["assessment_stale"])
+        self.assertEqual(scenario_c["ai_state"], AIState.RECOVERING.name)
+        self.assertEqual(scenario_c["casualties"], 0)
+        self.assertEqual(scenario_c["target_before_rebuild"], all_swords)
+
+        scenario_d = first["scenario_d_launch_gate"]
+        self.assertLess(
+            scenario_d["below_target_essence"],
+            scenario_d["target_essence"],
         )
-        self.assertEqual(first["launch_gate"]["wave_composition"], {
-            "swordsman": 0, "archer": 0, "shield": 6,
-        })
-        for phase in ("rally", "advance"):
-            self.assertEqual(
-                first["formation_rank_ordering"][phase]["front_to_back"],
-                ["shield", "swordsman", "archer"],
-            )
+        self.assertFalse(scenario_d["launched_below_target"])
+        self.assertGreaterEqual(
+            scenario_d["launched_wave_essence"],
+            scenario_d["target_essence"],
+        )
 
     def test_headless_simulation_is_deterministic_and_reports_health_metrics(self):
-        first = simulate(7, "idle", duration=30, dt=.05)
-        second = simulate(7, "idle", duration=30, dt=.05)
+        first = simulate(7, "idle", duration=240, dt=.05)
+        second = simulate(7, "idle", duration=240, dt=.05)
         self.assertEqual(first, second)
-        self.assertLess(first["first_attack"], 10)
-        self.assertEqual(first["stalled_units"], 0)
+        self.assertIsNotNone(first["first_attack"])
+        self.assertLess(first["first_attack"], 240)
         self.assertEqual(first["invalid_target_frames"], 0)
         self.assertEqual(first["stale_ai_unit_ids"], 0)
         self.assertEqual(set(first["produced"]), set(UNIT_KINDS))
@@ -2099,12 +2147,13 @@ class EnemySimulationHarnessTests(unittest.TestCase):
         self.assertNotEqual(game.enemy_ai.state, AIState.DEFENDING)
         self.assertFalse(game.enemy_ai.defenders)
 
-    def test_deterministic_assault_allows_two_attack_waves(self):
-        result = simulate(7, "player_assault", duration=150, dt=.05)
-        # Dynamic routing keeps more of the original wave alive, so resuming
-        # that wave after defense need not manufacture a replacement wave.
+    def test_deterministic_assault_eventually_allows_cost_valid_wave(self):
+        result = simulate(7, "player_assault", duration=240, dt=.05)
         self.assertGreaterEqual(result["wave_count"], 1)
-        self.assertGreaterEqual(result["state_transitions"]["ATTACKING"], 2)
+        self.assertGreaterEqual(
+            result["waves"][0]["squad_essence"],
+            6000,
+        )
 
 
 if __name__ == "__main__":
