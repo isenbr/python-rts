@@ -3452,11 +3452,18 @@ class Game:
                 bx, by = (cx + ex) / 2, (cy + ey) / 2
                 pygame.draw.line(self.screen, (38, 31, 27), (bx, by), (bx + math.cos(angle + 1) * length * .35, by + math.sin(angle + 1) * length * .35), max(1, rect.width // 16))
 
-    def draw_unit(self, u):
-        if u.team == "red" and not self.is_visible(u.x, u.y):
-            return
-        sx, sy = self.world_to_screen(u.x, u.y)
-        size = max(MIN_UNIT_RENDER_SIZE, int(self.zoom * UNIT_RENDER_SCALES[u.kind]))
+    def draw_unit(self, u, screen_position=None, render_size=None):
+        if screen_position is None:
+            if u.team == "red" and not self.is_visible(u.x, u.y):
+                return
+            sx, sy = self.world_to_screen(u.x, u.y)
+        else:
+            sx, sy = screen_position
+        size = (
+            max(MIN_UNIT_RENDER_SIZE, int(self.zoom * UNIT_RENDER_SCALES[u.kind]))
+            if render_size is None
+            else render_size
+        )
         rect = pygame.Rect(0, 0, size, size)
         rect.center = (round(sx), round(sy))
         color = GREEN if u.team == "green" else RED
@@ -3848,6 +3855,13 @@ class Game:
         card_h = max(440, h - 260)
         start_x = w // 2 - (card_w * 3 + gap * 2) // 2
         self.level_buttons = []
+        difficulties = {1: "EASY", 2: "MEDIUM", 3: "CONQUERER"}
+        unit_names = {
+            "swordsman": "Swordsmen",
+            "archer": "Archers",
+            "shield": "Shields",
+        }
+
         for index, config in enumerate(LEVELS.values()):
             card = pygame.Rect(start_x + index * (card_w + gap), 145, card_w, card_h)
             hover = card.collidepoint(pygame.mouse.get_pos())
@@ -3860,7 +3874,12 @@ class Game:
                 card, 3, border_radius=16,
             )
             number = self.big.render(str(config.number), True, GOLD)
-            self.screen.blit(number, number.get_rect(center=(card.centerx, card.y + 52)))
+            self.screen.blit(
+                number,
+                number.get_rect(
+                    center=(card.centerx, card.y + round(card_h * .10))
+                ),
+            )
             display_names = {
                 1: "Survive the Ambush!",
                 2: "Punish Your Enemies!",
@@ -3868,7 +3887,12 @@ class Game:
             }
             display_name = display_names[config.number]
             name = self.font.render(display_name, True, CREAM)
-            self.screen.blit(name, name.get_rect(center=(card.centerx, card.y + 96)))
+            self.screen.blit(
+                name,
+                name.get_rect(
+                    center=(card.centerx, card.y + round(card_h * .19))
+                ),
+            )
             story_descriptions = {
                 1: (
                     "Crimson raiders strike at dawn. Hold the line and "
@@ -3900,7 +3924,169 @@ class Game:
                     description.get_rect(
                         center=(
                             card.centerx,
-                            card.y + 142 + line_index * 22,
+                            card.y + round(card_h * .27) + line_index * 22,
+                        )
+                    ),
+                )
+            divider_color = (118, 94, 58)
+            divider_inset = max(30, round(card_w * .10))
+            first_divider_y = card.y + round(card_h * .36)
+            pygame.draw.line(
+                self.screen,
+                divider_color,
+                (card.x + divider_inset, first_divider_y),
+                (card.right - divider_inset, first_divider_y),
+                1,
+            )
+
+            # A compact battlefield preview fills the card without turning
+            # descriptive copy into a wall of text.
+            preview = pygame.Rect(
+                card.x + divider_inset,
+                card.y + round(card_h * .40),
+                card_w - divider_inset * 2,
+                round(card_h * .25),
+            )
+            pygame.draw.rect(
+                self.screen, (52, 72, 48), preview, border_radius=8
+            )
+            pygame.draw.rect(
+                self.screen, (101, 88, 59), preview, 2, border_radius=8
+            )
+            formations = {
+                1: (
+                    [
+                        ("king", .18, .50),
+                        ("swordsman", .36, .32),
+                        ("swordsman", .36, .68),
+                    ],
+                    [
+                        ("swordsman", .58, .24),
+                        ("swordsman", .58, .50),
+                        ("swordsman", .58, .76),
+                        ("archer", .70, .50),
+                    ],
+                ),
+                2: (
+                    [
+                        ("king", .10, .50),
+                        ("archer", .23, .34),
+                        ("archer", .23, .66),
+                        ("swordsman", .38, .18),
+                        ("swordsman", .38, .40),
+                        ("swordsman", .38, .60),
+                        ("swordsman", .38, .82),
+                    ],
+                    [
+                        ("swordsman", .54, .26),
+                        ("swordsman", .54, .50),
+                        ("swordsman", .54, .74),
+                        ("swordsman", .63, .26),
+                        ("swordsman", .63, .50),
+                        ("swordsman", .63, .74),
+                        ("swordsman", .72, .26),
+                        ("swordsman", .72, .50),
+                        ("swordsman", .72, .74),
+                        ("king", .86, .50),
+                    ],
+                ),
+                3: (
+                    [
+                        ("king", .09, .50),
+                        ("archer", .18, .35),
+                        ("archer", .18, .65),
+                        ("swordsman", .27, .23),
+                        ("swordsman", .27, .41),
+                        ("swordsman", .27, .59),
+                        ("swordsman", .27, .77),
+                        ("shield", .36, .30),
+                        ("shield", .36, .50),
+                        ("shield", .36, .70),
+                    ],
+                    [
+                        ("shield", .59, .22),
+                        ("shield", .59, .40),
+                        ("shield", .59, .60),
+                        ("shield", .59, .78),
+                        ("swordsman", .68, .18),
+                        ("swordsman", .68, .34),
+                        ("swordsman", .68, .50),
+                        ("swordsman", .68, .66),
+                        ("swordsman", .68, .82),
+                        ("swordsman", .76, .18),
+                        ("swordsman", .76, .34),
+                        ("swordsman", .76, .50),
+                        ("swordsman", .76, .66),
+                        ("swordsman", .76, .82),
+                        ("archer", .84, .18),
+                        ("archer", .84, .34),
+                        ("archer", .84, .50),
+                        ("archer", .84, .66),
+                        ("archer", .84, .82),
+                        ("king", .93, .50),
+                    ],
+                ),
+            }
+            green_formation, red_formation = formations[config.number]
+            preview_unit_size = max(
+                11, round(preview.height * (.12 if config.number == 3 else .20))
+            )
+            for team, formation in (
+                ("green", green_formation),
+                ("red", red_formation),
+            ):
+                for kind, x_ratio, y_ratio in formation:
+                    preview_unit = Unit(kind, team, 0, 0)
+                    size = round(
+                        preview_unit_size
+                        * UNIT_RENDER_SCALES[kind]
+                        / UNIT_RENDER_SCALES["swordsman"]
+                    )
+                    self.draw_unit(
+                        preview_unit,
+                        (
+                            preview.x + round(preview.width * x_ratio),
+                            preview.y + round(preview.height * y_ratio),
+                        ),
+                        size,
+                    )
+
+            second_divider_y = card.y + round(card_h * .69)
+            pygame.draw.line(
+                self.screen,
+                divider_color,
+                (card.x + divider_inset, second_divider_y),
+                (card.right - divider_inset, second_divider_y),
+                1,
+            )
+            difficulty = self.small.render(
+                f"DIFFICULTY  •  {difficulties[config.number]}",
+                True,
+                GOLD,
+            )
+            self.screen.blit(
+                difficulty,
+                difficulty.get_rect(
+                    center=(card.centerx, card.y + round(card_h * .75))
+                ),
+            )
+            available = "  •  ".join(
+                unit_names[kind] for kind in config.player_units
+            )
+            unit_lines = [available]
+            units_center_y = card.y + round(card_h * .81)
+            for unit_line_index, unit_line in enumerate(unit_lines):
+                units = self.small.render(
+                    unit_line, True, (190, 180, 153)
+                )
+                self.screen.blit(
+                    units,
+                    units.get_rect(
+                        center=(
+                            card.centerx,
+                            units_center_y
+                            + (unit_line_index - (len(unit_lines) - 1) / 2)
+                            * 19,
                         )
                     ),
                 )
