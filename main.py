@@ -2377,24 +2377,69 @@ class Game:
         pygame.draw.rect(self.screen, (32, 31, 28), rect.inflate(2, 2), border_radius=max(2, size // 4))
         pygame.draw.rect(self.screen, color, rect, border_radius=max(2, size // 4))
         if u.kind == "swordsman":
-            blade_start = (rect.left + size * .34, rect.bottom - size * .3)
-            blade_end = (rect.right - size * .16, rect.top + size * .16)
-            pygame.draw.line(self.screen, (225, 223, 202), blade_start, blade_end, max(2, size // 7))
+            # Match the archer's simple equipment-emblem treatment: pale
+            # weapon, brown fittings, and the team-colored tile beneath.
+            blade_start = (
+                rect.left + size * .34,
+                rect.bottom - size * .3,
+            )
+            blade_end = (
+                rect.right - size * .14,
+                rect.top + size * .14,
+            )
             pygame.draw.line(
                 self.screen,
-                (92, 65, 39),
-                (rect.left + size * .2, rect.centery + size * .05),
-                (rect.centerx + size * .06, rect.bottom - size * .2),
+                (55, 51, 45),
+                blade_start,
+                blade_end,
+                max(3, size // 5),
+            )
+            pygame.draw.line(
+                self.screen,
+                (225, 223, 202),
+                blade_start,
+                blade_end,
+                max(2, size // 8),
+            )
+            pygame.draw.polygon(
+                self.screen,
+                (225, 220, 196),
+                [
+                    blade_end,
+                    (
+                        blade_end[0] - size * .17,
+                        blade_end[1] + size * .05,
+                    ),
+                    (
+                        blade_end[0] - size * .05,
+                        blade_end[1] + size * .17,
+                    ),
+                ],
+            )
+            pygame.draw.line(
+                self.screen,
+                (109, 67, 35),
+                (
+                    blade_start[0] - size * .1,
+                    blade_start[1] - size * .1,
+                ),
+                (
+                    blade_start[0] + size * .1,
+                    blade_start[1] + size * .1,
+                ),
                 max(2, size // 9),
             )
             pygame.draw.line(
                 self.screen,
                 (92, 65, 39),
-                (rect.left + size * .25, rect.centery - size * .04),
-                (rect.centerx + size * .02, rect.centery + size * .2),
-                max(2, size // 10),
+                blade_start,
+                (
+                    rect.left + size * .22,
+                    rect.bottom - size * .18,
+                ),
+                max(2, size // 8),
             )
-        elif u.kind == "archer":
+        if u.kind == "archer":
             arc = pygame.Rect(rect.left + size * .15, rect.top + size * .12, size * .62, size * .76)
             pygame.draw.arc(self.screen, (109, 67, 35), arc, -math.pi / 2, math.pi / 2, max(2, size // 8))
             pygame.draw.line(self.screen, CREAM, (arc.centerx, arc.top), (arc.centerx, arc.bottom), max(1, size // 12))
