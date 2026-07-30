@@ -131,6 +131,36 @@ class LevelConfigurationTests(unittest.TestCase):
         self.assertTrue(any(u.team == "red" and u.kind == "archer"
                             for u in self.game.units))
 
+    def test_level_three_victory_stops_defensive_ai_after_king_dies(self):
+        self.game.reset(3)
+        self.game.state = "playing"
+        red_king = self.game.team_king("red")
+        attacker = next(
+            unit for unit in self.game.units
+            if unit.team == "green" and unit.kind == "swordsman"
+        )
+        attacker.x, attacker.y = red_king.x - .2, red_king.y
+        attacker.target = red_king
+        attacker.target_pos = (red_king.x, red_king.y)
+        attacker.attack_timer = 0
+        red_king.health = attacker.damage
+
+        defenders = [
+            unit for unit in self.game.units
+            if unit.is_enemy_ai_commandable
+        ]
+        self.game.enemy_ai.state = main.AIState.DEFENDING
+        self.game.enemy_ai.defenders = {unit.uid for unit in defenders}
+        self.game.enemy_ai.decision_timer = 999
+        self.game.enemy_ai.recruitment_timer = 999
+        for defender in defenders:
+            defender.attack_timer = 999
+
+        self.game.update(.016)
+
+        self.assertEqual(self.game.winner, "VICTORY")
+        self.assertIsNone(self.game.team_king("red"))
+
     def test_each_level_has_a_continuous_road_between_bases(self):
         for number in LEVELS:
             with self.subTest(level=number):

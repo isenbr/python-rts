@@ -3359,6 +3359,14 @@ class Game:
         try:
             for u in list(self.units):
                 self.update_unit(u, dt)
+                # A king can die partway through this loop. Stop immediately:
+                # level-three AI routines require both live objectives and
+                # must not run after team_king() starts returning None.
+                if (
+                    self.objective_health("green") <= 0
+                    or self.objective_health("red") <= 0
+                ):
+                    break
         finally:
             self._movement_snapshot_active = False
         dead_units = [unit for unit in self.units if unit.health <= 0]
@@ -3385,6 +3393,15 @@ class Game:
         for unit in self.units:
             if unit.team == "green" and unit.health <= 0:
                 self.enemy_ai.forget_player_unit(unit.uid)
+            if unit.target is not None and getattr(unit.target, "health", 0) <= 0:
+                dead_target_position = (unit.target.x, unit.target.y)
+                unit.target = None
+                if (
+                    unit.target_pos is not None
+                    and dist(unit.target_pos, dead_target_position) <= .35
+                ):
+                    unit.target_pos = None
+                self.clear_navigation(unit)
         self.units[:] = [u for u in self.units if u.health > 0]
         living_targets = set(id(unit) for unit in self.units)
         for unit in self.units:
