@@ -2557,7 +2557,7 @@ class Game:
         # without relying on module-level random state. Level one deliberately
         # stays all plains so its compact opening battle remains simple.
         region_kinds = ("plains", "plains", "forest", "mountain")
-        region_count = max(6, round(MAP_SIZE / 10))
+        region_count = max(20, round(MAP_SIZE / 3))
         regions = [
             (
                 rng.uniform(0, MAP_SIZE),
@@ -2567,10 +2567,10 @@ class Game:
             for _ in range(region_count)
         ]
         quiet_zones = (
-            (self.team_king("green").x, self.team_king("green").y, 4.5),
-            (*offset_from(GREEN_KING_POSITION, (5.5, .5)), 3.5),
-            (self.team_king("red").x, self.team_king("red").y, 4.5),
-            (*offset_from(RED_KING_POSITION, (-5.5, .5)), 3.5),
+            (self.team_king("green").x, self.team_king("green").y, 6.0),
+            (*offset_from(GREEN_KING_POSITION, (5.5, .5)), 4.75),
+            (self.team_king("red").x, self.team_king("red").y, 6.0),
+            (*offset_from(RED_KING_POSITION, (-5.5, .5)), 4.75),
         )
         for x in range(MAP_SIZE):
             for y in range(MAP_SIZE):
