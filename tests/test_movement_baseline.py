@@ -52,6 +52,27 @@ class MovementBaselineTests(unittest.TestCase):
             1e-9,
         )
 
+    def test_direct_movement_stops_exactly_at_a_nearby_destination(self):
+        mover = self.game.add_unit("swordsman", "green", 20, 20)
+
+        moved = self.game.move_unit_toward(mover, (20.25, 20), 1)
+
+        self.assertTrue(moved)
+        self.assertEqual((mover.x, mover.y), (20.25, 20))
+
+    def test_non_positive_dt_does_not_move_or_change_an_order(self):
+        mover = self.game.add_unit("swordsman", "green", 20, 20)
+        mover.target_pos = (30, 20)
+
+        for dt in (0, -1):
+            with self.subTest(dt=dt):
+                moved = self.game.move_unit_toward(
+                    mover, mover.target_pos, dt
+                )
+                self.assertFalse(moved)
+                self.assertEqual((mover.x, mover.y), (20, 20))
+                self.assertEqual(mover.target_pos, (30, 20))
+
     def test_stationary_unit_line_causes_a_detour_with_forward_progress(self):
         # Local separation has no deterministic left/right signal at a
         # perfectly symmetric wall. The pathfinding stage owns this detour.

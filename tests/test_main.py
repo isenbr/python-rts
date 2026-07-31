@@ -19,6 +19,7 @@ from main import (
     UNIT_STATS,
     WORLD_MAX,
     WORLD_MIN,
+    TerrainCell,
     Unit,
     dist,
 )
@@ -29,6 +30,12 @@ class GameTestCase(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(7))
         self.game.state = "playing"
+        # Mechanics tests retain their historical open-map baseline. Terrain
+        # speed behavior has dedicated deterministic coverage.
+        self.game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in self.game.terrain
+        }
 
 
 class ExistingMechanicsTests(GameTestCase):
@@ -235,7 +242,7 @@ class ExistingMechanicsTests(GameTestCase):
                         dist((first.x, first.y), (second.x, second.y)), 0
                     )
 
-    def test_roads_and_tactical_destinations_are_inside_new_map(self):
+    def test_terrain_and_tactical_destinations_are_inside_new_map(self):
         self.assertTrue(self.game.terrain)
         for x, y in self.game.terrain:
             self.assertLessEqual(0, x)

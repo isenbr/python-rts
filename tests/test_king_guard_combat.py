@@ -11,6 +11,7 @@ from main import (
     KING_SLASH_LIFETIME,
     RECRUIT_FORWARD_OFFSET,
     Game,
+    TerrainCell,
     dist,
 )
 
@@ -20,6 +21,10 @@ class KingGuardCombatTests(unittest.TestCase):
         self.game = Game(enemy_rng=random.Random(11))
         self.game.state = "playing"
         self.game.units.clear()
+        self.game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in self.game.terrain
+        }
 
     def add_guard(self, team="green", x=20, y=20):
         guard = self.game.add_unit("knight", team, x, y)

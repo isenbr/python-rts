@@ -29,7 +29,10 @@ class LevelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.game.level.player_units, ("swordsman",))
         self.assertEqual(self.game.essence, 2000)
         self.assertEqual(self.game.zoom, 30)
-        self.assertEqual(self.game.terrain, {})
+        self.assertEqual(len(self.game.terrain), main.MAP_SIZE ** 2)
+        self.assertEqual(
+            {cell.kind for cell in self.game.terrain.values()}, {"plains"}
+        )
         self.game.update_visibility()
         self.assertEqual(
             len(self.game.visible),
@@ -177,17 +180,20 @@ class LevelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.game.winner, "VICTORY")
         self.assertIsNone(self.game.team_king("red"))
 
-    def test_each_level_has_a_continuous_road_between_bases(self):
+    def test_each_level_has_a_continuous_path_between_bases(self):
         for number in LEVELS:
             with self.subTest(level=number):
                 self.game.reset(number)
-                road_columns = {x for x, _ in self.game.terrain}
+                path_columns = {
+                    x for (x, _), cell in self.game.terrain.items()
+                    if cell.kind == "path"
+                }
                 if number == 1:
-                    self.assertEqual(road_columns, set())
+                    self.assertEqual(path_columns, set())
                 else:
                     self.assertEqual(
-                        road_columns,
-                        set(range(main.ROAD_START_X, main.ROAD_END_X)),
+                        path_columns,
+                        set(range(main.MAP_SIZE)),
                     )
                 self.assertLess(
                     main.RED_KING_POSITION[0]

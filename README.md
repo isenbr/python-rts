@@ -2,7 +2,7 @@
 
 A compact, self-contained medieval RTS built with Python and pygame-ce. Keep
 the green Verdant King alive, raise swordsmen, archers, and shields, and kill
-the red Crimson King across a 120 x 120 tile battlefield.
+the red Crimson King across three progressively larger battlefields.
 
 ## Run
 
@@ -34,11 +34,19 @@ crowding for both armies. A slight overlap is intentional: units behave as
 soft obstacles, which keeps formations and congested melee groups moving
 without producing rigid gaps or constant jitter.
 
+Every map cell is traversable terrain. Mountains are rugged gray ground and
+halve movement speed (`0.5x`); forests are dense green ground and slow movement
+to `0.75x`; golden paths double movement speed (`2.0x`); and open plains use the
+normal speed (`1.0x`). Visual variations within each terrain kind are cosmetic
+and never affect gameplay.
+
 Stationary units and opposing troops can trigger grid-based A* detours when a
 direct route is blocked or movement has stalled. Moving allies are treated as
 costly, passable occupancy so groups can cross. Paths are cached, refreshed
 when their corridor changes, and invalidated immediately by a new destination
-or combat target. All movement and waypoints are clamped to the map.
+or combat target. Routing compares travel time rather than geometric distance,
+so a longer path across faster terrain can be preferred. All movement and
+waypoints are clamped to the map.
 
 ## Enemy production tuning
 

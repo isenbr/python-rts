@@ -123,7 +123,10 @@ class LongMatchCorrectnessTests(unittest.TestCase):
                 break
         progressed = [
             dist(starts[unit.uid], (unit.x, unit.y))
-            for unit in movers[1:] if unit in game.units
+            # Terrain-aware routes can legitimately change the deterministic
+            # battle winner. Removed unit objects retain their final position,
+            # which is sufficient for this movement-progress invariant.
+            for unit in movers[1:]
         ]
         self.assertTrue(progressed)
         self.assertGreater(max(progressed), 10)

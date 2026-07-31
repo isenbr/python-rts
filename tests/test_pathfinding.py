@@ -4,7 +4,7 @@ import unittest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import Game, WORLD_MAX, WORLD_MIN, dist
+from main import Game, TerrainCell, WORLD_MAX, WORLD_MIN, dist
 
 
 class PathfindingTests(unittest.TestCase):
@@ -13,6 +13,10 @@ class PathfindingTests(unittest.TestCase):
         game.state = "playing"
         game.enemy_ai.recruitment_timer = 999
         game.units.clear()
+        game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in game.terrain
+        }
         return game
 
     @staticmethod

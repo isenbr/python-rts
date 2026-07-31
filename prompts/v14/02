@@ -1,0 +1,57 @@
+Continue from the previous stage. Work in /work and do not commit changes.
+
+Introduce the terrain data model and deterministic map generation, but do not
+apply terrain movement multipliers or replace the current rendering yet.
+
+Requirements:
+
+1. Define exactly four canonical terrain kinds: `mountain`, `forest`, `path`,
+   and `plains`.
+2. Define one authoritative metadata table containing these exact movement
+   speed multipliers:
+   - mountain: 0.5
+   - forest: 0.75
+   - path: 2.0
+   - plains: 1.0
+3. Give each kind a distinct base color in that same table or another clearly
+   named centralized table. Keep colors readable beneath units, selection
+   markers, combat effects, and fog.
+4. Store an explicit valid terrain kind for every in-bounds map cell. Do not
+   overload missing dictionary entries to mean plains.
+5. Give every cell a deterministic variation index from 0 through 3. The same
+   level, map size, and terrain seed must produce the same terrain kinds and
+   variations across resets and runs.
+6. Keep gameplay kind separate from visual variation. All four variations of a
+   kind must share the same movement multiplier.
+7. Generate broad, coherent regions instead of independent one-cell noise.
+   Preserve a traversable path connecting the two sides of levels 2 and 3.
+8. Keep level 1 simple and fair. Ensure all kings, guards, initial troops, and
+   recruitment locations start on valid in-bounds terrain.
+9. Avoid changing global random state. Use a dedicated seeded Random instance.
+10. Remove or adapt the old road-only assumptions without leaving two competing
+    terrain representations.
+
+Add tests proving:
+
+- all MAP_SIZE squared cells exist and contain valid terrain kinds;
+- all variation indices are integers in the inclusive range 0..3;
+- generation is deterministic across reset and fresh Game instances;
+- every kind maps to the exact required multiplier;
+- variation does not affect the multiplier;
+- no generated cell is outside the map;
+- required spawn and objective areas remain valid;
+- level-specific generation works at 20, 60, and 120 tile map sizes;
+- generation does not mutate Python's module-level random state.
+
+Checks:
+
+1. Run the new terrain-model tests repeatedly to catch nondeterminism.
+2. Run existing level and reset tests.
+3. Run the complete test suite.
+4. Run `python3 -m py_compile main.py`.
+5. Run `git diff --check` and `git status --short`.
+6. If a screenshot is taken, follow the repository screenshot rules and report
+   all visual problems after inspection.
+
+Do not implement terrain speed or the final graphics in this step. Do not stop
+with failing checks.

@@ -10,7 +10,7 @@ import time
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import Game, WORLD_MAX, WORLD_MIN, dist
+from main import Game, TerrainCell, WORLD_MAX, WORLD_MIN, dist
 
 
 ARMY_SIZES = (25, 50, 100, 200)
@@ -22,6 +22,11 @@ def _movement_game(count, seed):
     game.state = "playing"
     game.units.clear()
     game.enemy_ai.update = lambda dt: None
+    # Keep this structural movement benchmark comparable with its historical
+    # open-map baseline; terrain integration has a separate deterministic test.
+    game.terrain = {
+        position: TerrainCell("plains", 0) for position in game.terrain
+    }
     columns = 20
     for index in range(count):
         x = 8 + (index % columns) * 2.5

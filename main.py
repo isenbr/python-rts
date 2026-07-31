@@ -31,8 +31,26 @@ FOG_UNEXPLORED_ALPHA = 235
 FOG_TEXTURE_STRENGTH = 3
 FOG_TEXTURE_SCALE = .16
 TERRAIN_SEED = 4729
-GROUND_COLOR = (76, 109, 60)
 TERRAIN_DETAIL_MIN_ZOOM = 7
+TERRAIN_KINDS = ("mountain", "forest", "path", "plains")
+TERRAIN_METADATA = {
+    "mountain": {
+        "movement_multiplier": 0.5,
+        "base_color": (105, 105, 96),
+    },
+    "forest": {
+        "movement_multiplier": 0.75,
+        "base_color": (42, 83, 49),
+    },
+    "path": {
+        "movement_multiplier": 2.0,
+        "base_color": (161, 132, 79),
+    },
+    "plains": {
+        "movement_multiplier": 1.0,
+        "base_color": (91, 132, 65),
+    },
+}
 UNIT_KINDS = ("swordsman", "archer", "shield")
 PURCHASABLE_UNIT_KINDS = UNIT_KINDS
 OBJECTIVE_UNIT_KINDS = ("king",)
@@ -65,6 +83,11 @@ UNIT_PATHFINDING_CELL_SIZE = 1.0
 UNIT_WAYPOINT_ARRIVAL_TOLERANCE = .12
 UNIT_PATH_RECALCULATION_INTERVAL = .5
 UNIT_PATH_CLEAR_HYSTERESIS = .35
+# A clear direct order is allowed to trigger one terrain search when non-plains
+# cells occur in this bounded corridor. The result then stays cached exactly as
+# an obstacle detour does; static terrain never causes per-frame searches.
+UNIT_TERRAIN_ROUTE_SCAN_RADIUS = 8
+UNIT_TERRAIN_ROUTE_MAX_DISTANCE = 10.0
 UNIT_SLOT_SETTLE_RADIUS = .12
 # A failed route must have a predictable upper bound.  This is deliberately
 # below a full-map flood while still allowing long routes around ordinary
@@ -175,9 +198,7 @@ LEVEL_ONE_ENEMY_STARTING_UNITS = (
     ("archer", -5.5, -1.5),
     ("archer", -5.5, 1.5),
 )
-ROAD_START_X = round(MAP_SIZE * .025)
-ROAD_END_X = MAP_SIZE - ROAD_START_X
-ROAD_WAVE_LENGTH = MAP_SIZE * .085
+PATH_WAVE_LENGTH = MAP_SIZE * .085
 
 
 @dataclass(frozen=True)
@@ -192,6 +213,25 @@ class LevelConfig:
     enemy_ai: str
     starting_essence: float
     enemy_starting_essence: float
+
+
+@dataclass(frozen=True)
+class TerrainCell:
+    """Gameplay terrain and its independent, cosmetic variation."""
+
+    kind: str
+    variation: int
+
+    def __post_init__(self):
+        if self.kind not in TERRAIN_KINDS:
+            raise ValueError(f"Invalid terrain kind: {self.kind!r}")
+        if type(self.variation) is not int or not 0 <= self.variation <= 3:
+            raise ValueError("Terrain variation must be an integer from 0 to 3")
+
+
+def terrain_movement_multiplier(kind):
+    """Return gameplay speed metadata without consulting visual variation."""
+    return TERRAIN_METADATA[kind]["movement_multiplier"]
 
 
 LEVELS = {
@@ -219,16 +259,14 @@ def configure_map(size):
     """Update the shared world geometry before constructing a level."""
     global MAP_SIZE, MAP_CENTER, WORLD_MAX
     global GREEN_KING_POSITION, RED_KING_POSITION, CAMERA_START
-    global ROAD_START_X, ROAD_END_X, ROAD_WAVE_LENGTH
+    global PATH_WAVE_LENGTH
     MAP_SIZE = size
     MAP_CENTER = MAP_SIZE / 2
     WORLD_MAX = MAP_SIZE - .5
     GREEN_KING_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
     RED_KING_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
     CAMERA_START = (GREEN_KING_POSITION[0] + 2.5, MAP_CENTER + .5)
-    ROAD_START_X = max(0, round(MAP_SIZE * .025))
-    ROAD_END_X = MAP_SIZE - ROAD_START_X
-    ROAD_WAVE_LENGTH = MAP_SIZE * .085
+    PATH_WAVE_LENGTH = MAP_SIZE * .085
 
 
 def clamp(value, low, high):
@@ -364,6 +402,8 @@ class Unit:
     nav_last_progress_position: Optional[tuple[float, float]] = None
     nav_clear_time: float = 0.0
     nav_side_preference: int = 0
+    nav_terrain_revision: int = -1
+    nav_terrain_route: bool = False
 
     def __post_init__(self):
         try:
@@ -2331,7 +2371,9 @@ class Button:
 
 
 class Game:
-    def __init__(self, enemy_rng=None, ai_decision_interval=.25):
+    def __init__(
+        self, enemy_rng=None, ai_decision_interval=.25, terrain_seed=None
+    ):
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
         self.big = pygame.font.Font(None, 72)
@@ -2347,6 +2389,7 @@ class Game:
         self.level = LEVELS[self.level_number]
         self.enemy_rng = enemy_rng
         self.ai_decision_interval = ai_decision_interval
+        self.terrain_seed = TERRAIN_SEED if terrain_seed is None else terrain_seed
         self.reset()
 
     def reset(self, level_number=None):
@@ -2360,6 +2403,7 @@ class Game:
         self.enemy_essence = self.level.enemy_starting_essence
         self.uid = 0
         self.navigation_time = 0.0
+        self.terrain_revision = getattr(self, "terrain_revision", 0) + 1
         self.path_calculation_count = 0
         self.path_calculation_lengths: list[int] = []
         self.path_expanded_nodes = 0
@@ -2384,6 +2428,7 @@ class Game:
         self._fog_revision = 0
         self._fog_cache_key = None
         self._fog_cache_surface = None
+        self._terrain_tile_cache = {}
         self.drag_start = None
         self.drag_now = None
         self.arrows = []
@@ -2504,10 +2549,23 @@ class Game:
         return max(0, king.health) if king is not None else 0
 
     def make_terrain(self):
-        rng = random.Random(TERRAIN_SEED)
+        rng = random.Random(
+            f"verdant-crown:{self.terrain_seed}:{self.level_number}:{MAP_SIZE}"
+        )
         terrain = {}
-        self.terrain_tones = {}
-        self.terrain_details = {}
+        # Nearest-region assignment produces large, readable terrain masses
+        # without relying on module-level random state. Level one deliberately
+        # stays all plains so its compact opening battle remains simple.
+        region_kinds = ("plains", "plains", "forest", "mountain")
+        region_count = max(6, round(MAP_SIZE / 10))
+        regions = [
+            (
+                rng.uniform(0, MAP_SIZE),
+                rng.uniform(0, MAP_SIZE),
+                region_kinds[rng.randrange(len(region_kinds))],
+            )
+            for _ in range(region_count)
+        ]
         quiet_zones = (
             (self.team_king("green").x, self.team_king("green").y, 4.5),
             (*offset_from(GREEN_KING_POSITION, (5.5, .5)), 3.5),
@@ -2516,35 +2574,24 @@ class Game:
         )
         for x in range(MAP_SIZE):
             for y in range(MAP_SIZE):
-                self.terrain_tones[(x, y)] = rng.choices(
-                    (-3, -2, -1, 0, 1, 2, 3),
-                    (1, 4, 8, 13, 8, 4, 1),
-                )[0]
+                variation = rng.randrange(4)
+                kind = "plains" if self.level_number == 1 else min(
+                    regions,
+                    key=lambda region: (
+                        (x + .5 - region[0]) ** 2
+                        + (y + .5 - region[1]) ** 2
+                    ),
+                )[2]
+                terrain[(x, y)] = TerrainCell(kind, variation)
                 if any((x + .5 - qx) ** 2 + (y + .5 - qy) ** 2 < radius ** 2
                        for qx, qy, radius in quiet_zones):
-                    continue
-                roll = rng.random()
-                if roll < .018:
-                    kind = "tuft"
-                elif roll < .026:
-                    kind = "stone"
-                elif roll < .035:
-                    kind = "dirt"
-                else:
-                    continue
-                self.terrain_details[(x, y)] = (
-                    kind,
-                    rng.uniform(.2, .8),
-                    rng.uniform(.2, .8),
-                    rng.uniform(-.35, .35),
-                )
+                    terrain[(x, y)] = TerrainCell("plains", variation)
         if self.level_number != 1:
-            for x in range(ROAD_START_X, ROAD_END_X):
-                y = int(MAP_CENTER + math.sin(x / ROAD_WAVE_LENGTH) * 2)
-                terrain[(x, y)] = "road"
-                terrain[(x, y + 1)] = "road"
-                self.terrain_details.pop((x, y), None)
-                self.terrain_details.pop((x, y + 1), None)
+            for x in range(MAP_SIZE):
+                y = int(MAP_CENTER + math.sin(x / PATH_WAVE_LENGTH) * 2)
+                for path_y in (y, min(y + 1, MAP_SIZE - 1)):
+                    variation = terrain[(x, path_y)].variation
+                    terrain[(x, path_y)] = TerrainCell("path", variation)
         return terrain
 
     def add_unit(self, kind, team, x, y):
@@ -2679,6 +2726,8 @@ class Game:
         unit.nav_destination_key = None
         unit.nav_last_progress_position = None
         unit.nav_clear_time = 0.0
+        unit.nav_terrain_revision = -1
+        unit.nav_terrain_route = False
 
     def currently_visible_enemy(self, enemy):
         return self.is_visible(enemy.x, enemy.y)
@@ -2810,6 +2859,85 @@ class Game:
             mx, my = (attacker.x + target.x) / 2, (attacker.y + target.y) / 2
             self.particles.append([mx, my, .25, attacker.team])
 
+    def terrain_cell_and_speed_multiplier(self, position):
+        """Resolve gameplay terrain for an in-bounds world position safely.
+
+        Cosmetic variation is deliberately ignored.  The plains fallback
+        keeps movement usable for tools that construct a partial terrain map.
+        """
+        x, y = clamp_to_map(position)
+        cell = self.terrain.get((
+            min(MAP_SIZE - 1, max(0, int(x))),
+            min(MAP_SIZE - 1, max(0, int(y))),
+        ))
+        if cell is None:
+            cell = TerrainCell("plains", 0)
+        return cell, terrain_movement_multiplier(cell.kind)
+
+    def _move_with_terrain(self, unit, velocity, dt, max_distance=None):
+        """Integrate a base velocity, splitting time at terrain boundaries.
+
+        Separation is terrain-scaled along with intended travel.  Its combined
+        speed remains capped at the existing separation maximum, including on
+        paths, so a fast tile cannot turn overlap correction into tunneling.
+        """
+        velocity_x, velocity_y = velocity
+        base_speed = math.hypot(velocity_x, velocity_y)
+        if base_speed <= 1e-12 or dt <= 0:
+            return
+        direction_x = velocity_x / base_speed
+        direction_y = velocity_y / base_speed
+        remaining_time = dt
+        remaining_distance = max_distance
+        while remaining_time > 1e-12:
+            # At an exact boundary, sample the tile being entered rather than
+            # repeatedly charging time to the tile just left.
+            sample_x = unit.x + direction_x * 1e-9
+            sample_y = unit.y + direction_y * 1e-9
+            _, multiplier = self.terrain_cell_and_speed_multiplier(
+                (sample_x, sample_y)
+            )
+            effective_speed = min(
+                base_speed * multiplier,
+                unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
+            )
+            if effective_speed <= 1e-12:
+                break
+            allowed_distance = effective_speed * remaining_time
+            if remaining_distance is not None:
+                allowed_distance = min(allowed_distance, remaining_distance)
+
+            boundary_distance = math.inf
+            for coordinate, direction in (
+                (unit.x, direction_x), (unit.y, direction_y)
+            ):
+                if direction > 1e-12:
+                    boundary = math.floor(coordinate + 1e-9) + 1
+                    boundary_distance = min(
+                        boundary_distance, (boundary - coordinate) / direction
+                    )
+                elif direction < -1e-12:
+                    boundary = math.ceil(coordinate - 1e-9) - 1
+                    boundary_distance = min(
+                        boundary_distance, (boundary - coordinate) / direction
+                    )
+
+            travel = min(allowed_distance, boundary_distance)
+            if travel <= 1e-12:
+                break
+            unit.x, unit.y = clamp_to_map((
+                unit.x + direction_x * travel,
+                unit.y + direction_y * travel,
+            ))
+            remaining_time -= travel / effective_speed
+            if remaining_distance is not None:
+                remaining_distance -= travel
+                if remaining_distance <= 1e-12:
+                    break
+            if travel + 1e-12 < allowed_distance:
+                continue
+            break
+
     def move_unit_toward(self, unit, destination, dt):
         """Blend preferred travel with shared local separation.
 
@@ -2875,11 +3003,11 @@ class Game:
             velocity_x *= max_speed / velocity
             velocity_y *= max_speed / velocity
         before = (unit.x, unit.y)
-        step = dt
-        if separation_x == separation_y == 0:
-            step = min(dt, distance / unit.speed) if unit.speed else 0
-        unit.x, unit.y = clamp_to_map(
-            (unit.x + velocity_x * step, unit.y + velocity_y * step)
+        self._move_with_terrain(
+            unit,
+            (velocity_x, velocity_y),
+            dt,
+            distance if separation_x == separation_y == 0 else None,
         )
         if unit.is_king_objective or unit.is_autonomous_guard:
             home = unit.home_position or before
@@ -2960,6 +3088,22 @@ class Game:
 
     def _corridor_clear(self, start, end, hard_cells):
         """Grid line-of-sight with the same no-corner-cutting rule as A*."""
+        cells = self._corridor_cells(start, end)
+        start_cell = cells[0]
+        previous = start_cell
+        for cell in cells[1:]:
+            if cell in hard_cells:
+                return False
+            if cell[0] != previous[0] and cell[1] != previous[1]:
+                if (cell[0], previous[1]) in hard_cells:
+                    return False
+                if (previous[0], cell[1]) in hard_cells:
+                    return False
+            previous = cell
+        return True
+
+    def _corridor_cells(self, start, end):
+        """Return deterministic Bresenham cells crossed by a nav segment."""
         start_cell, end_cell = self._nav_cell(start), self._nav_cell(end)
         x, y = start_cell
         target_x, target_y = end_cell
@@ -2967,12 +3111,11 @@ class Game:
         step_x = 1 if x < target_x else -1
         step_y = 1 if y < target_y else -1
         error = dx - dy
-        previous = (x, y)
+        cells = []
         while True:
-            if (x, y) != start_cell and (x, y) in hard_cells:
-                return False
+            cells.append((x, y))
             if (x, y) == end_cell:
-                return True
+                return cells
             doubled = 2 * error
             next_x, next_y = x, y
             if doubled > -dy:
@@ -2981,13 +3124,46 @@ class Game:
             if doubled < dx:
                 error += dx
                 next_y += step_y
-            if next_x != previous[0] and next_y != previous[1]:
-                if (next_x, previous[1]) in hard_cells:
-                    return False
-                if (previous[0], next_y) in hard_cells:
-                    return False
-            previous = (next_x, next_y)
             x, y = next_x, next_y
+
+    def _terrain_step_cost(self, current, neighbor):
+        """Return base-speed travel time for a cardinal or diagonal grid step.
+
+        Costs are seconds for a hypothetical unit whose plains speed is one
+        tile/second. Entering terrain divides geometric step length by its
+        speed multiplier; actual unit speed is a common factor and cannot
+        change the optimal route.
+        """
+        diagonal = current[0] != neighbor[0] and current[1] != neighbor[1]
+        length = math.sqrt(2) if diagonal else 1.0
+        cell = self.terrain.get(neighbor, TerrainCell("plains", 0))
+        return length / terrain_movement_multiplier(cell.kind)
+
+    def _terrain_corridor_cost(self, start, end):
+        cells = self._corridor_cells(start, end)
+        return sum(
+            self._terrain_step_cost(current, neighbor)
+            for current, neighbor in zip(cells, cells[1:])
+        )
+
+    def _terrain_search_relevant(self, start, end):
+        """Bound the one-shot A* policy to terrain near the direct order."""
+        start_cell, end_cell = self._nav_cell(start), self._nav_cell(end)
+        radius = min(
+            UNIT_TERRAIN_ROUTE_SCAN_RADIUS,
+            max(1, int(math.ceil(dist(start_cell, end_cell) * .25))),
+        )
+        min_x = max(0, min(start_cell[0], end_cell[0]) - radius)
+        max_x = min(MAP_SIZE - 1, max(start_cell[0], end_cell[0]) + radius)
+        min_y = max(0, min(start_cell[1], end_cell[1]) - radius)
+        max_y = min(MAP_SIZE - 1, max(start_cell[1], end_cell[1]) + radius)
+        return any(
+            terrain_movement_multiplier(
+                self.terrain.get((x, y), TerrainCell("plains", 0)).kind
+            ) != 1.0
+            for x in range(min_x, max_x + 1)
+            for y in range(min_y, max_y + 1)
+        )
 
     def _direct_unit_corridor_clear(
         self, mover, start, end, combat_target=None
@@ -3021,13 +3197,6 @@ class Game:
             mover, destination, combat_target
         )
         start, goal = self._nav_cell((mover.x, mover.y)), self._nav_cell(destination)
-        if (
-            self._corridor_clear((mover.x, mover.y), destination, hard)
-            and self._corridor_clear(
-                (mover.x, mover.y), destination, set(soft)
-            )
-        ):
-            return [], hard
         directions = (
             (-1, 0), (0, -1), (0, 1), (1, 0),
             (-1, -1), (-1, 1), (1, -1), (1, 1),
@@ -3073,13 +3242,17 @@ class Game:
                     or (current[0], current[1] + offset_y) in hard
                 ):
                     continue
-                step_cost = math.sqrt(2) if diagonal else 1.0
+                step_cost = self._terrain_step_cost(current, neighbor)
                 new_cost = current_cost + step_cost + soft.get(neighbor, 0.0)
                 if new_cost + 1e-12 >= costs.get(neighbor, math.inf):
                     continue
                 costs[neighbor] = new_cost
                 came_from[neighbor] = current
-                heuristic = math.hypot(goal[0] - neighbor[0], goal[1] - neighbor[1])
+                # The fastest terrain multiplier is 2.0, so straight-line
+                # distance / 2 is an admissible lower bound in these units.
+                heuristic = math.hypot(
+                    goal[0] - neighbor[0], goal[1] - neighbor[1]
+                ) / 2.0
                 heapq.heappush(frontier, (
                     new_cost + heuristic + side_penalty(neighbor), new_cost,
                     neighbor[1], neighbor[0], neighbor,
@@ -3095,17 +3268,28 @@ class Game:
             current = came_from[current]
             cells.append(current)
         cells.reverse()
-        # Greedily retain only waypoints required by occupancy line-of-sight.
+        # Greedily smooth only when the clear segment is no slower than the
+        # A* sub-route. This retains waypoints that capture terrain savings.
         waypoints = []
         anchor_position = (mover.x, mover.y)
         index = 1
         while index < len(cells):
             furthest = index
+            route_cost = self._terrain_step_cost(
+                cells[index - 1], cells[index]
+            )
             for candidate in range(index + 1, len(cells)):
+                route_cost += self._terrain_step_cost(
+                    cells[candidate - 1], cells[candidate]
+                )
                 if not self._corridor_clear(
                     anchor_position, self._nav_world(cells[candidate]), hard
                 ):
                     break
+                if self._terrain_corridor_cost(
+                    anchor_position, self._nav_world(cells[candidate])
+                ) > route_cost + 1e-9:
+                    continue
                 furthest = candidate
             waypoint = (
                 destination if furthest == len(cells) - 1
@@ -3152,12 +3336,14 @@ class Game:
             unit.nav_destination is None
             or dist(unit.nav_destination, final) > .35
             or unit.nav_destination_key != target_key
+            or unit.nav_terrain_revision != self.terrain_revision
         )
         if destination_changed:
             self.clear_navigation(unit)
             unit.nav_destination = final
             unit.nav_destination_key = target_key
             unit.nav_last_progress_position = (unit.x, unit.y)
+            unit.nav_terrain_revision = self.terrain_revision
             # Keep equivalent detours on one deterministic side for the life
             # of this strategic destination.
             unit.nav_side_preference = -1 if unit.uid % 2 else 1
@@ -3193,8 +3379,15 @@ class Game:
             >= UNIT_PATH_RECALCULATION_INTERVAL
         )
         stalled = unit.nav_blocked_time >= UNIT_BLOCKED_TIME_THRESHOLD
+        terrain_search = (
+            destination_changed
+            and direct_clear
+            and combat_target is None
+            and dist((unit.x, unit.y), final) <= UNIT_TERRAIN_ROUTE_MAX_DISTANCE
+            and self._terrain_search_relevant((unit.x, unit.y), final)
+        )
         need_path = (
-            (not direct_clear or stalled)
+            (not direct_clear or stalled or terrain_search)
             and (
                 destination_changed
                 or (
@@ -3217,16 +3410,17 @@ class Game:
             unit.nav_blocked_time = 0.0
             unit.nav_last_progress_position = (unit.x, unit.y)
             unit.nav_waypoints = waypoints or []
+            unit.nav_terrain_route = terrain_search and bool(waypoints)
             unit.nav_waypoint_index = 0
             unit.nav_clear_time = 0.0
             next_waypoint = unit.nav_waypoints[0] if unit.nav_waypoints else None
-        elif direct_clear and next_waypoint is not None:
+        elif direct_clear and next_waypoint is not None and not unit.nav_terrain_route:
             unit.nav_clear_time += max(0.0, dt)
             if unit.nav_clear_time < UNIT_PATH_CLEAR_HYSTERESIS:
                 direct_clear = False
         else:
             unit.nav_clear_time = 0.0
-        if direct_clear:
+        if direct_clear and not unit.nav_terrain_route:
             unit.nav_waypoints.clear()
             unit.nav_waypoint_index = 0
             next_waypoint = None
@@ -3459,43 +3653,106 @@ class Game:
     def draw_terrain(self):
         w, h = self.screen.get_size()
         view_h = h - HUD_H
-        self.screen.fill((70, 101, 55))
+        self.screen.fill((70, 101, 55), pygame.Rect(0, 0, w, max(0, view_h)))
         left, top = self.screen_to_world((0, 0))
         right, bottom = self.screen_to_world((w, view_h))
         x0, x1 = math.floor(left) - 1, math.ceil(right) + 1
         y0, y1 = math.floor(top) - 1, math.ceil(bottom) + 1
-        tile = max(1, int(self.zoom + 1))
-        for x in range(x0, x1):
-            for y in range(y0, y1):
-                sx, sy = self.world_to_screen(x, y)
-                tone = self.terrain_tones.get((x, y), 0)
-                color = tuple(channel + tone for channel in GROUND_COLOR)
-                kind = self.terrain.get((x, y))
-                if kind == "road": color = (137, 118, 77)
-                pygame.draw.rect(self.screen, color, (int(sx), int(sy), tile, tile))
-                detail = self.terrain_details.get((x, y))
-                if self.zoom >= TERRAIN_DETAIL_MIN_ZOOM and detail:
-                    detail_kind, ox, oy, angle = detail
-                    cx = round(sx + self.zoom * ox)
-                    cy = round(sy + self.zoom * oy)
-                    if detail_kind == "tuft":
-                        length = max(2, round(self.zoom * .24))
-                        color = (55, 91, 48)
-                        pygame.draw.line(self.screen, color, (cx, cy), (cx - 1, cy - length), 1)
-                        pygame.draw.line(self.screen, color, (cx, cy), (cx + 2, cy - length + 1), 1)
-                    elif detail_kind == "stone":
-                        radius = max(1, round(self.zoom * .11))
-                        pygame.draw.circle(self.screen, (96, 99, 84), (cx, cy), radius)
-                        pygame.draw.circle(self.screen, (123, 124, 103), (cx - 1, cy - 1), 1)
-                    else:
-                        width = max(3, round(self.zoom * .38))
-                        height = max(2, round(self.zoom * .17))
-                        patch = pygame.Surface((width, height), pygame.SRCALPHA)
-                        pygame.draw.ellipse(patch, (111, 92, 57, 75), patch.get_rect())
-                        rotated = pygame.transform.rotate(patch, math.degrees(angle))
-                        self.screen.blit(rotated, rotated.get_rect(center=(cx, cy)))
+        old_clip = self.screen.get_clip()
+        self.screen.set_clip(pygame.Rect(0, 0, w, max(0, view_h)))
+        for x in range(max(0, x0), min(MAP_SIZE, x1)):
+            sx0 = round(self.world_to_screen(x, 0)[0])
+            sx1 = round(self.world_to_screen(x + 1, 0)[0])
+            for y in range(max(0, y0), min(MAP_SIZE, y1)):
+                sy0 = round(self.world_to_screen(0, y)[1])
+                sy1 = round(self.world_to_screen(0, y + 1)[1])
+                cell = self.terrain[(x, y)]
+                tile_surface = self.terrain_tile_surface(
+                    cell.kind, cell.variation, (sx1 - sx0, sy1 - sy0),
+                    detailed=self.zoom >= TERRAIN_DETAIL_MIN_ZOOM,
+                )
+                self.screen.blit(tile_surface, (sx0, sy0))
         border = self.world_to_screen(0, 0)
         pygame.draw.rect(self.screen, (39, 54, 35), (border[0], border[1], MAP_SIZE * self.zoom, MAP_SIZE * self.zoom), max(2, int(self.zoom * .15)))
+        self.screen.set_clip(old_clip)
+
+    def terrain_tile_surface(self, kind, variation, size, detailed=None):
+        """Return a cached, deterministic primitive tile for one terrain cell."""
+        if kind not in TERRAIN_KINDS or type(variation) is not int or not 0 <= variation <= 3:
+            raise ValueError("Invalid terrain tile kind or variation")
+        width, height = max(1, int(size[0])), max(1, int(size[1]))
+        if detailed is None:
+            detailed = min(width, height) >= TERRAIN_DETAIL_MIN_ZOOM
+        key = (kind, variation, width, height, detailed)
+        cached = self._terrain_tile_cache.get(key)
+        if cached is not None:
+            return cached
+        surface = pygame.Surface((width, height))
+        base = TERRAIN_METADATA[kind]["base_color"]
+        tone = (-3, -1, 1, 3)[variation]
+        surface.fill(tuple(clamp(channel + tone, 0, 255) for channel in base))
+        if detailed:
+            self._draw_terrain_detail(surface, kind, variation)
+        self._terrain_tile_cache[key] = surface
+        return surface
+
+    @staticmethod
+    def _draw_terrain_detail(surface, kind, variation):
+        """Draw one of exactly four code-native detail arrangements."""
+        w, h = surface.get_size()
+        point = lambda x, y: (round(w * x), round(h * y))
+        line_width = max(1, round(min(w, h) * .07))
+        if kind == "plains":
+            grass = (48, 101, 49)
+            centers = (((.28, .70),), ((.70, .66),), ((.30, .35), (.72, .72)), ((.62, .38),))
+            for cx, cy in centers[variation]:
+                root = point(cx, cy)
+                pygame.draw.line(surface, grass, root, point(cx - .08, cy - .25), line_width)
+                pygame.draw.line(surface, grass, root, point(cx + .09, cy - .20), line_width)
+            if variation in (1, 3):
+                flower = (239, 205, 112) if variation == 1 else (226, 219, 190)
+                pygame.draw.circle(surface, flower, point(.30 if variation == 1 else .75, .30 if variation == 1 else .70), max(1, round(min(w, h) * .07)))
+        elif kind == "forest":
+            layouts = (
+                ((.35, .40, .25), (.67, .62, .24)),
+                ((.30, .67, .23), (.57, .35, .27), (.76, .68, .19)),
+                ((.27, .35, .20), (.52, .61, .28), (.77, .31, .19)),
+                ((.38, .50, .29), (.70, .42, .22), (.70, .73, .17)),
+            )
+            for cx, cy, radius in layouts[variation]:
+                r = max(2, round(min(w, h) * radius))
+                pygame.draw.ellipse(surface, (31, 55, 34), (round(w * (cx - .08)), round(h * (cy + radius * .55)), max(2, round(w * .16)), max(2, round(h * .16))))
+                pygame.draw.circle(surface, (38, 105, 54), point(cx, cy), r)
+                pygame.draw.circle(surface, (55, 125, 65), point(cx - .06, cy - .07), max(1, round(r * .55)))
+        elif kind == "path":
+            dark, light = (112, 88, 55), (190, 159, 99)
+            if variation == 0:
+                for x in (.30, .68):
+                    pygame.draw.line(surface, dark, point(x, .12), point(x - .04, .88), line_width)
+            elif variation == 1:
+                for x, y in ((.24, .26), (.67, .38), (.43, .74), (.82, .79)):
+                    pygame.draw.circle(surface, dark, point(x, y), max(1, line_width))
+                    pygame.draw.circle(surface, light, point(x - .03, y - .03), max(1, line_width // 2))
+            elif variation == 2:
+                pygame.draw.line(surface, dark, point(.12, .72), point(.85, .57), line_width)
+                for x, y in ((.16, .23), (.78, .25)):
+                    pygame.draw.circle(surface, light, point(x, y), max(1, line_width))
+            else:
+                for x, y in ((.15, .18), (.84, .22), (.12, .72), (.78, .82)):
+                    pygame.draw.circle(surface, (103, 91, 69), point(x, y), max(1, line_width + 1))
+        else:  # mountain
+            layouts = (
+                ((.18, .78), (.50, .18), (.82, .78)),
+                ((.10, .75), (.40, .30), (.58, .58), (.72, .18), (.92, .75)),
+                ((.08, .80), (.35, .31), (.49, .59), (.67, .14), (.94, .80)),
+                ((.08, .76), (.36, .22), (.54, .54), (.72, .29), (.94, .76)),
+            )
+            points = [point(x, y) for x, y in layouts[variation]]
+            pygame.draw.polygon(surface, (76, 77, 73), points)
+            peak_index = min(range(len(points)), key=lambda index: points[index][1])
+            peak = points[peak_index]
+            pygame.draw.polygon(surface, (124, 121, 111), [peak, points[-1], point(.54, .72)])
+            pygame.draw.lines(surface, (166, 166, 153), False, [point(.42, .40), peak, point(.57, .40)], max(1, line_width - 1))
 
     def draw_cracks(self, rect, ratio, seed):
         if ratio > .78:
@@ -3959,7 +4216,7 @@ class Game:
                     "survive."
                 ),
                 2: (
-                    "March down the long road. Break every force sent "
+                    "March down the long path. Break every force sent "
                     "against you."
                 ),
                 3: (
@@ -4263,7 +4520,10 @@ class Game:
             old_world = self.screen_to_world(pygame.mouse.get_pos())
             w, h = self.screen.get_size()
             fit_zoom = max(w / MAP_SIZE, (h - HUD_H) / MAP_SIZE)
+            old_zoom = self.zoom
             self.zoom = clamp(self.zoom * (1.13 ** event.y), fit_zoom, 30)
+            if self.zoom != old_zoom:
+                self._terrain_tile_cache.clear()
             new_world = self.screen_to_world(pygame.mouse.get_pos())
             self.camera[0] += old_world[0] - new_world[0]; self.camera[1] += old_world[1] - new_world[1]
             self.clamp_camera()

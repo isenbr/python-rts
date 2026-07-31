@@ -34,6 +34,42 @@ preferred travel with a local separation velocity, clamps the result to the
 map, and records whether displacement occurred. It has no blocked timer, route
 search, or waypoint state.
 
+### Terrain-scaled displacement
+
+`Game.terrain_cell_and_speed_multiplier` resolves the gameplay cell at a
+clamped world position and reads only its terrain kind. Visual variation never
+participates in movement. `Game._move_with_terrain` applies that multiplier to
+actual displacement and splits large updates at each crossed tile boundary, so
+the remaining frame time is charged at the newly entered tile's rate.
+
+Terrain scaling lives inside the shared movement primitive, after destination
+selection, so direct orders, cached waypoints, combat pursuit, autonomous
+guards and kings, return-to-post travel, and AI tactical or strategic movement
+all use it. `Unit.speed` remains the unmodified base statistic.
+
+A* uses the same terrain model in base-speed travel-time units: a cardinal
+step costs `1 / movement_multiplier` seconds and a diagonal costs `sqrt(2) /
+movement_multiplier`. Its Euclidean heuristic is divided by the maximum 2.0
+terrain multiplier, making it an admissible lower bound. Terrain is never a
+hard obstacle. Waypoint smoothing compares the travel time of each clear
+shortcut with the A* sub-route, so it cannot discard a faster terrain lane.
+
+For unobstructed orders up to 10 tiles, a bounded corridor scan (at most eight
+cells beyond the order's bounding box) decides whether terrain merits one A*
+calculation. Longer clear orders stay direct, providing a measurable upper
+bound on speculative search work; ordinary cached routing can still activate
+if dynamic obstruction or a sustained stall occurs.
+The resulting route is cached for the order and is not replaced merely because
+the geometric direct corridor is clear. Reset increments a terrain revision,
+which invalidates navigation state and prevents old terrain routes from being
+reused.
+
+Local separation deliberately uses the current tile multiplier as well. The
+combined preferred-plus-separation velocity remains bounded by the existing
+maximum separation speed after terrain scaling. In particular, a path can
+double ordinary travel but cannot amplify an overlap correction beyond that
+global cap, avoiding tunneling and excessive correction.
+
 ## Destination sources
 
 ### Player orders and formation offsets

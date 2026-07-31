@@ -1,0 +1,65 @@
+Continue from the previous stage. Work in /work and do not commit changes.
+
+Perform final terrain-system integration, balancing, regression testing, and
+documentation. Fix defects found, but do not add unrelated features.
+
+Audit the completed system against these exact rules:
+
+- mountain speed multiplier: 0.5;
+- forest speed multiplier: 0.75;
+- path speed multiplier: 2.0;
+- plains speed multiplier: 1.0;
+- four deterministic visual variations for every terrain kind;
+- variation never changes gameplay;
+- every map cell has one valid terrain kind;
+- every terrain kind remains traversable.
+
+Integration requirements:
+
+1. Confirm kings, guards, initial troops, recruits, formation destinations, AI
+   rally points, and objectives work on all three level sizes.
+2. Confirm combat pursuit and attack transitions do not oscillate when units
+   cross terrain boundaries near attack range.
+3. Confirm path speed does not allow tunneling through units or overshooting
+   formation slots, targets, map bounds, or guard leashes.
+4. Confirm slow terrain cannot permanently trigger false blocked/stall states or
+   excessive path recalculation.
+5. Confirm fog visibility is based on the intended vision rules, not altered by
+   terrain speed or graphics.
+6. Confirm match simulations remain deterministic when given the same seeds.
+7. Update README.md with terrain identities, exact speed effects, and a concise
+   explanation that routing considers travel time.
+8. Remove obsolete road/detail code and stale comments. Keep the implementation
+   compact and centralized.
+
+Required checks:
+
+1. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py simulate_performance.py`.
+2. Run every focused terrain, level, movement, navigation, collision, combat,
+   king, fog, and AI test.
+3. Run `python3 -m unittest discover -s tests` at least twice and report exact
+   totals to expose order dependence or nondeterminism.
+4. Run movement stress and navigation performance tests and report path count,
+   expanded nodes, limit failures, runtime, and any baseline change.
+5. Run representative match and enemy-AI simulations and inspect them for
+   stalls, unreachable objectives, oscillation, and exceptions.
+6. Search for every direct use of `unit.speed`, every terrain-kind string, old
+   `road` assumptions, and random calls in terrain rendering. Resolve or explain
+   every remaining occurrence.
+7. Run `git diff --check` and `git status --short`.
+8. Review the complete diff for accidental gameplay changes, generated files,
+   and unrelated edits.
+
+Final visual checks are mandatory:
+
+1. Save screenshots only under `/work/screenshots`.
+2. Include all 16 kind/variation combinations and each playable level at a
+   representative zoom, with fog and units visible where applicable.
+3. Immediately inspect every screenshot with `view_image` using its absolute
+   path and report all visual problems.
+4. Correct material problems and repeat the relevant capture and inspection.
+
+Finish with a concise report of changed files, exact multiplier verification,
+all test and simulation results, performance findings, screenshots inspected,
+remaining limitations, and `git status --short`. Do not commit changes and do
+not stop with failing checks.

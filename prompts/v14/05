@@ -1,0 +1,72 @@
+Continue from the previous stage. Work in /work and do not commit changes.
+
+Implement clear, simple 2D graphics for all four terrain tile types, with four
+deterministic visual variations per type.
+
+Visual direction:
+
+- plains: warm grass green; small combinations of grass blades, tiny flowers,
+  or subtle open-ground marks;
+- forest: deep green; simple top-down clusters of round tree canopies with short
+  dark trunks or shadows;
+- path: warm tan or ochre; simple packed-earth marks such as edge stones, wheel
+  ruts, or scattered pebbles;
+- mountain: cool gray-brown; simple top-down/angular peaks with a darker slope
+  and a small light ridge or snow highlight.
+
+Requirements:
+
+1. Use pygame drawing primitives and code-native assets. Do not add external
+   image dependencies.
+2. Give each kind a distinct base color that remains recognizable at minimum
+   and maximum supported zoom.
+3. Implement exactly four recognizable variations, indexed 0..3, for every
+   tile kind. Variations should alter detail placement or shape without changing
+   collision, movement, or terrain identity.
+4. Draw deterministically. Rendering must not call random.seed() or consume
+   module-level random state each frame.
+5. Keep tile seams clean when panning and zooming. Avoid one-pixel gaps caused
+   by integer rounding.
+6. Clip or size decorations so they do not visibly spill across unrelated tile
+   types unless the effect is deliberate and consistent.
+7. Keep units, health indicators, selection outlines, projectiles, slash
+   effects, fog, and HUD legible over every terrain kind.
+8. Reduce or simplify fine detail below the existing terrain-detail zoom
+   threshold. Large maps must not create a new Surface per visible tile per
+   frame; cache reusable variation surfaces by kind, variation, and relevant
+   render scale where practical.
+9. Fog must continue to cover unexplored terrain and dim explored terrain.
+10. Preserve the battlefield border and avoid drawing terrain into the HUD.
+
+Add non-brittle tests for:
+
+- every kind/variation combination selecting a valid drawing path;
+- rendering at minimum and maximum zoom without exceptions;
+- rendering at multiple window sizes;
+- deterministic pixel output for a fixed camera, zoom, and terrain map;
+- rendering not mutating gameplay terrain or global random state;
+- cache reuse and invalidation after zoom/reset where relevant;
+- no terrain drawing below the HUD boundary.
+
+Visual checks are mandatory:
+
+1. Capture screenshots showing all 16 kind/variation combinations at a useful
+   zoom, plus representative gameplay views at near, medium, and far zoom.
+2. Save every screenshot only under `/work/screenshots`.
+3. Immediately after each screenshot, inspect it with `view_image` using its
+   absolute path.
+4. Report every observed issue, including unclear tile identity, repetitive
+   patterns, seams, clipping, weak contrast, unit readability, fog readability,
+   HUD overlap, and details disappearing or becoming noisy at different zooms.
+5. Fix material visual problems and repeat the screenshot-and-inspection cycle.
+
+Checks:
+
+1. Run the focused terrain-render tests.
+2. Run fog, level, unit-render, and main tests.
+3. Run the complete test suite.
+4. Run a representative rendering/performance measurement and report it.
+5. Run `python3 -m py_compile main.py`.
+6. Run `git diff --check` and `git status --short`.
+
+Do not stop with failing checks or uninspected screenshots.

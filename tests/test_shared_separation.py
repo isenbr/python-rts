@@ -10,6 +10,7 @@ from main import (
     WORLD_MAX,
     WORLD_MIN,
     Game,
+    TerrainCell,
     dist,
 )
 
@@ -20,6 +21,10 @@ class SharedSeparationTests(unittest.TestCase):
         game.state = "playing"
         game.enemy_ai.recruitment_timer = 999
         game.units.clear()
+        game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in game.terrain
+        }
         return game
 
     @staticmethod

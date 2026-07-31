@@ -1,0 +1,65 @@
+Continue from the previous stage. Work in /work and do not commit changes.
+
+Apply terrain movement speed consistently to all unit movement.
+
+Required behavior:
+
+- mountain tiles multiply movement speed by 0.5;
+- forest tiles multiply movement speed by 0.75;
+- path tiles multiply movement speed by 2.0;
+- plains tiles multiply movement speed by 1.0.
+
+Requirements:
+
+1. Add a small reusable helper that safely resolves the terrain cell and speed
+   multiplier for an in-bounds world position.
+2. Apply the multiplier to actual distance traveled, not only to animation or
+   A* scoring.
+3. Apply it in every movement route: direct orders, cached-waypoint movement,
+   combat pursuit, autonomous king/knight movement, return-to-post behavior,
+   AI movement, and local-separation displacement where appropriate.
+4. Preserve frame-rate independence. A unit crossing a terrain boundary during
+   a large update must not gain an obviously incorrect full-frame bonus from
+   the tile it started on. Subdivide or clamp integration at tile boundaries if
+   needed, while keeping the common case efficient.
+5. Preserve existing map clamping, guard leashes, formation settling, attack
+   ranges, navigation invalidation, and collision behavior.
+6. Terrain must not change base Unit.speed values. Compute effective speed at
+   movement time so stats, combat assessment, and saved expectations retain
+   their original meaning.
+7. A stationary unit must remain stationary on every terrain kind.
+8. Visual variation indices must have no effect on speed.
+9. Do not make mountains impassable; they are traversable at half speed.
+10. Decide explicitly whether separation uses the current tile multiplier and
+    document the choice. Prefer bounding separation so path tiles cannot create
+    tunneling or excessive overlap correction.
+
+Add deterministic tests proving, for the same unit and elapsed time on an open
+map:
+
+- mountain distance is 0.5 times plains distance;
+- forest distance is 0.75 times plains distance;
+- path distance is 2.0 times plains distance;
+- plains retains the prior baseline distance;
+- results are approximately equal across 30, 60, and 120 FPS updates;
+- crossing a tile boundary produces a stable, correctly split distance;
+- diagonal movement uses the same scalar multiplier without becoming faster
+  than cardinal movement;
+- every unit kind receives the multiplier;
+- variation 0, 1, 2, and 3 produce identical movement for the same kind;
+- map-edge clamping and guard-leash limits still hold;
+- issuing a new order and following cached waypoints both respect terrain.
+
+Checks:
+
+1. Run the new terrain-speed tests.
+2. Run all movement, collision, navigation, combat-transition, king, and AI tests.
+3. Run movement stress and navigation performance tests; compare with the
+   previous baseline and investigate material regressions.
+4. Run the complete test suite.
+5. Run `python3 -m py_compile main.py simulate_matchup.py simulate_enemy_ai.py simulate_performance.py`.
+6. Run `git diff --check` and `git status --short`.
+7. If a screenshot is taken, follow the repository screenshot rules.
+
+Do not implement the final terrain graphics in this step. Do not weaken tests
+or stop with failing checks.
