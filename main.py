@@ -3364,7 +3364,10 @@ class Game:
                 # must not run after team_king() starts returning None.
                 if (
                     self.objective_health("green") <= 0
-                    or self.objective_health("red") <= 0
+                    or (
+                        self.level_number != 1
+                        and self.objective_health("red") <= 0
+                    )
                 ):
                     break
         finally:

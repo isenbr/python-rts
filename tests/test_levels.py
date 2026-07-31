@@ -85,6 +85,22 @@ class LevelConfigurationTests(unittest.TestCase):
 
         self.assertEqual(self.game.zoom, starting_zoom)
 
+    def test_level_one_units_continue_updating_without_a_red_king(self):
+        self.game.reset(1)
+        self.game.state = "playing"
+        self.assertTrue(self.game.recruit("swordsman"))
+        swordsman = next(
+            unit for unit in self.game.units
+            if unit.team == "green" and unit.kind == "swordsman"
+        )
+        swordsman.selected = True
+        starting_position = (swordsman.x, swordsman.y)
+        self.game.issue_order((10, 10))
+
+        self.game.update(.1)
+
+        self.assertNotEqual((swordsman.x, swordsman.y), starting_position)
+
     def test_recruitment_keyboard_shortcuts_are_disabled(self):
         self.game.reset(1)
         starting_gold = self.game.essence
