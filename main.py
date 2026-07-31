@@ -48,6 +48,7 @@ SWORDSMAN_BASE_SPEED = 1
 SWORDSMAN_ATTACK_RANGE = 1.02
 UNIT_VISION_RADIUS = 8.0
 PLAYER_RECRUIT_ENGAGE_RADIUS = UNIT_VISION_RADIUS
+PLAYER_AUTO_ATTACK_RADIUS = 5.0
 # Shared movement geometry, steering, and path-cache timing. Units are treated
 # as soft discs: UNIT_SOFT_OVERLAP is intentional visual/physical compression,
 # so separation begins only inside the remaining minimum center distance.
@@ -2718,11 +2719,16 @@ class Game:
         if self.visible != previous_visible or len(self.explored) != previous_explored_count:
             self._fog_revision += 1
 
-    def find_target(self, unit):
+    def find_target(self, unit, search_radius=None):
         opponents = [u for u in self.units if u.team != unit.team and u.health > 0]
         if unit.team == "green":
             opponents = [u for u in opponents if self.currently_visible_enemy(u)]
-        in_range = [e for e in opponents if dist((unit.x, unit.y), (e.x, e.y)) <= unit.attack_range]
+        if search_radius is None:
+            search_radius = unit.attack_range
+        in_range = [
+            enemy for enemy in opponents
+            if dist((unit.x, unit.y), (enemy.x, enemy.y)) <= search_radius
+        ]
         return min(
             in_range,
             key=lambda e: (dist((unit.x, unit.y), (e.x, e.y)), e.uid),
@@ -3295,8 +3301,16 @@ class Game:
             return
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
-        elif u.is_player_commandable:
-            auto = self.find_target(u)
+        elif u.is_player_commandable and target is None:
+            # Idle units seek nearby enemies. A unit following a move order
+            # retains the existing attack-move behavior, firing only when an
+            # enemy is already inside its weapon range without diverting.
+            search_radius = (
+                PLAYER_AUTO_ATTACK_RADIUS
+                if u.target_pos is None
+                else u.attack_range
+            )
+            auto = self.find_target(u, search_radius)
         else:
             auto = None
         if auto is not None:

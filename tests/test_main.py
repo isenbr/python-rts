@@ -11,6 +11,7 @@ from main import (
     Game,
     MAP_SIZE,
     MAP_CENTER,
+    PLAYER_AUTO_ATTACK_RADIUS,
     PLAYER_RECRUIT_ENGAGE_RADIUS,
     UNIT_COSTS,
     UNIT_KINDS,
@@ -453,6 +454,50 @@ class ShieldPlayerFacingTests(GameTestCase):
         self.assertIs(self.game.find_target(player), hidden)
         enemy = self.game.add_unit("archer", "red", 11, 10)
         self.assertIs(self.game.find_target(enemy), player)
+
+    def test_idle_player_unit_auto_attacks_enemy_within_five_tiles(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        player = self.game.add_unit("swordsman", "green", 10, 10)
+        enemy = self.game.add_unit(
+            "swordsman", "red", 10 + PLAYER_AUTO_ATTACK_RADIUS, 10
+        )
+        self.game.visible.add((int(enemy.x), int(enemy.y)))
+
+        self.game.update_unit(player, .25)
+
+        self.assertIs(player.target, enemy)
+        self.assertGreater(player.x, 10)
+
+    def test_idle_player_unit_ignores_enemy_beyond_five_tiles(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        player = self.game.add_unit("swordsman", "green", 10, 10)
+        enemy = self.game.add_unit(
+            "swordsman", "red", 10 + PLAYER_AUTO_ATTACK_RADIUS + .01, 10
+        )
+        self.game.visible.add((int(enemy.x), int(enemy.y)))
+
+        self.game.update_unit(player, .25)
+
+        self.assertIsNone(player.target)
+        self.assertEqual((player.x, player.y), (10, 10))
+
+    def test_player_order_prevents_idle_auto_attack(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        player = self.game.add_unit("swordsman", "green", 10, 10)
+        enemy = self.game.add_unit("swordsman", "red", 12, 10)
+        self.game.visible.add((int(enemy.x), int(enemy.y)))
+        player.target_pos = (10, 20)
+
+        self.game.update_unit(player, .25)
+
+        self.assertIsNone(player.target)
+        self.assertGreater(player.y, 10)
 
     def test_pause_resume_preserves_match_and_stops_simulation(self):
         unit = self.game.units[0]
