@@ -3725,21 +3725,7 @@ class Game:
                 pygame.draw.circle(surface, (38, 105, 54), point(cx, cy), r)
                 pygame.draw.circle(surface, (55, 125, 65), point(cx - .06, cy - .07), max(1, round(r * .55)))
         elif kind == "path":
-            dark, light = (112, 88, 55), (190, 159, 99)
-            if variation == 0:
-                for x in (.30, .68):
-                    pygame.draw.line(surface, dark, point(x, .12), point(x - .04, .88), line_width)
-            elif variation == 1:
-                for x, y in ((.24, .26), (.67, .38), (.43, .74), (.82, .79)):
-                    pygame.draw.circle(surface, dark, point(x, y), max(1, line_width))
-                    pygame.draw.circle(surface, light, point(x - .03, y - .03), max(1, line_width // 2))
-            elif variation == 2:
-                pygame.draw.line(surface, dark, point(.12, .72), point(.85, .57), line_width)
-                for x, y in ((.16, .23), (.78, .25)):
-                    pygame.draw.circle(surface, light, point(x, y), max(1, line_width))
-            else:
-                for x, y in ((.15, .18), (.84, .22), (.12, .72), (.78, .82)):
-                    pygame.draw.circle(surface, (103, 91, 69), point(x, y), max(1, line_width + 1))
+            pass
         else:  # mountain
             layouts = (
                 ((.18, .78), (.50, .18), (.82, .78)),
