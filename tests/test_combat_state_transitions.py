@@ -4,13 +4,17 @@ import unittest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import AIState, Game
+from main import AIState, Game, TerrainCell
 from simulate_enemy_ai import simulate_integrated_decision_scenario
 
 
 class CombatStateTransitionTests(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(41))
+        self.game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in self.game.terrain
+        }
         self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.ai = self.game.enemy_ai
         self.ai._known_red_uids.clear()

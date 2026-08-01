@@ -16,6 +16,7 @@ from main import EnemyAI, Game, TerrainCell, WORLD_MAX, WORLD_MIN, dist
 
 ARMY_SIZES = (25, 50, 100, 200)
 FIXED_DT = .05
+INTEGRATED_TERRAIN_SEED = 6
 
 
 def _movement_game(count, seed):
@@ -95,7 +96,11 @@ def simulate_scaling(sizes=ARMY_SIZES, seconds=2.0, seed=73):
 
 def simulate_integrated_battle(frames=300, warmup=60, seed=73):
     """Measure a deterministic, rendered 100-unit dense battle at 60 Hz."""
-    game = Game(enemy_rng=random.Random(seed))
+    # Pin terrain independently from gameplay's fresh-match seeds so benchmark
+    # comparisons measure code changes instead of a different random map.
+    game = Game(
+        enemy_rng=random.Random(seed), terrain_seed=INTEGRATED_TERRAIN_SEED
+    )
     game.state = "playing"
     game.units[:] = [
         unit for unit in game.units

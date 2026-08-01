@@ -51,8 +51,14 @@ ends or the target escapes.
 Every map cell is traversable terrain. Mountains are rugged gray ground and
 halve movement speed (`0.5x`); forests are dense green ground and slow movement
 to `0.75x`; golden paths double movement speed (`2.0x`); and open plains use the
-normal speed (`1.0x`). Visual variations within each terrain kind are cosmetic
-and never affect gameplay.
+normal speed (`1.0x`). Levels two and three generate a fresh asymmetric mix of
+large terrain regions and a branching road network whenever a level is begun.
+Across generated maps, ordinary terrain averages one third plains, one third
+forest, and one third mountain, excluding roads and protected starting zones.
+Restarting after a result preserves that battlefield for a fair retry, while
+king, guard, and recruitment areas always remain plains. Level one stays a
+fixed all-plains tutorial. Visual variations within each terrain kind are
+cosmetic and never affect gameplay.
 
 Stationary units can trigger grid-based A* detours when a direct route is
 blocked or movement has stalled. Moving troops use combat engagement and local

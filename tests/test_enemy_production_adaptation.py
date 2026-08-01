@@ -4,7 +4,14 @@ import unittest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import AIState, CombatAssessment, CombatAdvantage, Game, UNIT_COSTS
+from main import (
+    AIState,
+    CombatAssessment,
+    CombatAdvantage,
+    Game,
+    TerrainCell,
+    UNIT_COSTS,
+)
 
 
 NEUTRAL = {"swordsman": 1 / 3, "archer": 1 / 3, "shield": 1 / 3}
@@ -13,6 +20,10 @@ NEUTRAL = {"swordsman": 1 / 3, "archer": 1 / 3, "shield": 1 / 3}
 class EnemyProductionAdaptationTests(unittest.TestCase):
     def setUp(self):
         self.game = Game(enemy_rng=random.Random(303))
+        self.game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in self.game.terrain
+        }
         self.game.units[:] = [
             unit for unit in self.game.units if unit.is_king_objective
         ]

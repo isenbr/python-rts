@@ -9,7 +9,22 @@ import random
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import AIState, Game, UNIT_COSTS, UNIT_KINDS, dist, offset_from
+from main import (
+    AIState,
+    Game,
+    TerrainCell,
+    UNIT_COSTS,
+    UNIT_KINDS,
+    dist,
+    offset_from,
+)
+
+
+def _fill_plain_terrain(game):
+    """Give controlled AI scenarios an unobstructed visibility baseline."""
+    game.terrain = {
+        position: TerrainCell("plains", 0) for position in game.terrain
+    }
 
 
 def _scenario_idle(game):
@@ -81,6 +96,7 @@ def simulate_integration_review(seed=73, purchases=60):
 
     def encounter(player_count, red_count):
         game = Game(enemy_rng=random.Random(seed))
+        _fill_plain_terrain(game)
         game.units[:] = [
             unit for unit in game.units if unit.is_king_objective
         ]
@@ -250,6 +266,7 @@ def simulate_launch_gate_scenario(seed=73):
 def simulate_integrated_decision_scenario(seed=73):
     """Exercise production and combat-decision precedence in one fixed setup."""
     game = Game(enemy_rng=random.Random(seed))
+    _fill_plain_terrain(game)
     game.units[:] = [unit for unit in game.units if unit.is_king_objective]
     game.state = "playing"
     ai = game.enemy_ai
@@ -366,7 +383,7 @@ def simulate_integrated_decision_scenario(seed=73):
 
 
 def simulate(seed, scenario="idle", duration=360.0, dt=.05):
-    game = Game(enemy_rng=random.Random(seed))
+    game = Game(enemy_rng=random.Random(seed), terrain_seed=seed)
     game.state = "playing"
     game.update_visibility()
     SCENARIOS[scenario](game)

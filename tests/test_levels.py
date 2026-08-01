@@ -191,10 +191,13 @@ class LevelConfigurationTests(unittest.TestCase):
                 if number == 1:
                     self.assertEqual(path_columns, set())
                 else:
+                    main_route = self.game._terrain_road_routes[0]
                     self.assertEqual(
                         path_columns,
-                        set(range(main.MAP_SIZE)),
+                        set(range(main_route[0][0], main_route[-1][0] + 1)),
                     )
+                    self.assertGreater(main_route[0][0], 0)
+                    self.assertLess(main_route[-1][0], main.MAP_SIZE - 1)
                 self.assertLess(
                     main.RED_KING_POSITION[0]
                     - main.GREEN_KING_POSITION[0],

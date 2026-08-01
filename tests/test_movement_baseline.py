@@ -5,7 +5,7 @@ import unittest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from main import Game, UNIT_SEPARATION_RADIUS, UNIT_SOFT_OVERLAP
+from main import Game, TerrainCell, UNIT_SEPARATION_RADIUS, UNIT_SOFT_OVERLAP
 from tests.movement_helpers import (
     made_progress_toward_destination,
     pairwise_unit_separation,
@@ -19,6 +19,10 @@ class MovementBaselineTests(unittest.TestCase):
         self.game.state = "playing"
         self.game.enemy_ai.recruitment_timer = 999
         self.game.units.clear()
+        self.game.terrain = {
+            position: TerrainCell("plains", 0)
+            for position in self.game.terrain
+        }
 
     def test_green_units_converging_through_one_point_avoid_excess_penetration(self):
         destination = (30.0, 30.0)

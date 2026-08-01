@@ -219,7 +219,6 @@ LEVEL_ONE_ENEMY_STARTING_UNITS = (
     ("archer", -5.5, -1.5),
     ("archer", -5.5, 1.5),
 )
-PATH_WAVE_LENGTH = MAP_SIZE * .085
 
 
 @dataclass(frozen=True)
@@ -285,14 +284,12 @@ def configure_map(size):
     """Update the shared world geometry before constructing a level."""
     global MAP_SIZE, MAP_CENTER, WORLD_MAX
     global GREEN_KING_POSITION, RED_KING_POSITION, CAMERA_START
-    global PATH_WAVE_LENGTH
     MAP_SIZE = size
     MAP_CENTER = MAP_SIZE / 2
     WORLD_MAX = MAP_SIZE - .5
     GREEN_KING_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
     RED_KING_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
     CAMERA_START = (GREEN_KING_POSITION[0] + 2.5, MAP_CENTER + .5)
-    PATH_WAVE_LENGTH = MAP_SIZE * .085
 
 
 def clamp(value, low, high):
@@ -2522,6 +2519,13 @@ class Game:
         self._path_searches_this_update = 0
         self.rebuild_unit_spatial_hash()
 
+    def start_level(self, level_number, terrain_seed=None):
+        """Begin a fresh battlefield, preserving its seed for later retries."""
+        if terrain_seed is None:
+            terrain_seed = random.SystemRandom().getrandbits(64)
+        self.terrain_seed = terrain_seed
+        self.reset(level_number)
+
     def rebuild_unit_spatial_hash(self):
         """Snapshot all living units for local collision queries."""
         self.unit_spatial_hash.rebuild(self.units)
@@ -2615,18 +2619,27 @@ class Game:
             f"verdant-crown:{self.terrain_seed}:{self.level_number}:{MAP_SIZE}"
         )
         terrain = {}
-        # Nearest-region assignment produces large, readable terrain masses
-        # without relying on module-level random state. Level one deliberately
-        # stays all plains so its compact opening battle remains simple.
-        region_kinds = ("plains", "plains", "forest", "mountain")
-        region_count = max(20, round(MAP_SIZE / 3))
+        self._terrain_road_routes = ()
+        # Weighted nearest-region assignment preserves large, readable terrain
+        # masses while allowing each seed to vary their proportions and size.
+        # Level one deliberately stays all plains so its opening remains simple.
+        base_region_count = max(20, round(MAP_SIZE / 3))
+        region_count = max(12, round(base_region_count * rng.uniform(.75, 1.25)))
+        self._terrain_region_count = 0 if self.level_number == 1 else region_count
+        biome_kinds = ("plains", "forest", "mountain")
+        complete_sets, remainder = divmod(region_count, len(biome_kinds))
+        region_kinds = list(biome_kinds) * complete_sets
+        region_kinds.extend(rng.sample(biome_kinds, remainder))
+        rng.shuffle(region_kinds)
+
         regions = [
             (
                 rng.uniform(0, MAP_SIZE),
                 rng.uniform(0, MAP_SIZE),
-                region_kinds[rng.randrange(len(region_kinds))],
+                region_kinds[index],
+                rng.uniform(.72, 1.35),
             )
-            for _ in range(region_count)
+            for index in range(region_count)
         ]
         quiet_zones = (
             (self.team_king("green").x, self.team_king("green").y, 6.0),
@@ -2634,6 +2647,15 @@ class Game:
             (self.team_king("red").x, self.team_king("red").y, 6.0),
             (*offset_from(RED_KING_POSITION, (-5.5, .5)), 4.75),
         )
+        self._terrain_protected_cells = {
+            (x, y)
+            for x in range(MAP_SIZE)
+            for y in range(MAP_SIZE)
+            if any(
+                (x + .5 - qx) ** 2 + (y + .5 - qy) ** 2 < radius ** 2
+                for qx, qy, radius in quiet_zones
+            )
+        }
         for x in range(MAP_SIZE):
             for y in range(MAP_SIZE):
                 variation = rng.randrange(4)
@@ -2642,19 +2664,107 @@ class Game:
                     key=lambda region: (
                         (x + .5 - region[0]) ** 2
                         + (y + .5 - region[1]) ** 2
-                    ),
+                    ) / region[3] ** 2,
                 )[2]
                 terrain[(x, y)] = TerrainCell(kind, variation)
-                if any((x + .5 - qx) ** 2 + (y + .5 - qy) ** 2 < radius ** 2
-                       for qx, qy, radius in quiet_zones):
-                    terrain[(x, y)] = TerrainCell("plains", variation)
         if self.level_number != 1:
-            for x in range(MAP_SIZE):
-                y = int(MAP_CENTER + math.sin(x / PATH_WAVE_LENGTH) * 2)
-                for path_y in (y, min(y + 1, MAP_SIZE - 1)):
-                    variation = terrain[(x, path_y)].variation
-                    terrain[(x, path_y)] = TerrainCell("path", variation)
+            self._terrain_road_routes = self._make_road_routes(rng)
+            for route in self._terrain_road_routes:
+                for x, y in route:
+                    for path_y in (y, min(y + 1, MAP_SIZE - 1)):
+                        variation = terrain[(x, path_y)].variation
+                        terrain[(x, path_y)] = TerrainCell("path", variation)
+        # Reapply protected plains last so paths never expose kings, guards, or
+        # fresh recruits to the path terrain's increased incoming damage.
+        for (x, y), cell in terrain.items():
+            if (x, y) in self._terrain_protected_cells:
+                terrain[(x, y)] = TerrainCell("plains", cell.variation)
         return terrain
+
+    def _make_road_routes(self, rng):
+        """Return a connected main road and one or two split/rejoin branches."""
+        clearance = RECRUIT_FORWARD_OFFSET + 8.0
+        start_x = round(GREEN_KING_POSITION[0] + clearance)
+        end_x = round(RED_KING_POSITION[0] - clearance)
+        span = max(1, end_x - start_x)
+        amplitude = min(12.0, MAP_SIZE * .18)
+        main_anchors = [(start_x, MAP_CENTER)]
+        anchor_fractions = (.25, .5, .75)
+        section_width = span / 4
+        maximum_section_bend = min(amplitude, section_width * .65)
+        previous_y = MAP_CENTER
+        for index, fraction in enumerate(anchor_fractions):
+            remaining_sections = 4 - (index + 1)
+            reachable_offset = remaining_sections * maximum_section_bend
+            candidate_y = previous_y + rng.uniform(
+                -maximum_section_bend, maximum_section_bend
+            )
+            anchor_y = clamp(
+                candidate_y,
+                max(3, MAP_CENTER - reachable_offset),
+                min(MAP_SIZE - 4, MAP_CENTER + reachable_offset),
+            )
+            main_anchors.append((
+                round(start_x + span * fraction),
+                anchor_y,
+            ))
+            previous_y = anchor_y
+        main_anchors.append((end_x, MAP_CENTER))
+        main_route = self._smooth_road_route(main_anchors)
+        main_y = {x: y for x, y in main_route}
+
+        branch_count = rng.randint(1, 2)
+        branch_ranges = (
+            ((.15, .55), (.45, .85)) if branch_count == 2
+            else ((.28, .72),)
+        )
+        routes = [main_route]
+        for range_start, range_end in branch_ranges:
+            branch_start_x = round(start_x + span * range_start)
+            branch_end_x = round(start_x + span * range_end)
+            branch_start_y = main_y[branch_start_x]
+            branch_end_y = main_y[branch_end_x]
+            midpoint_x = round((branch_start_x + branch_end_x) / 2)
+            branch_baseline_y = (branch_start_y + branch_end_y) / 2
+            branch_amplitude = min(
+                15.0,
+                MAP_SIZE * .14,
+                max(4.0, (midpoint_x - branch_start_x) * .75),
+            )
+            minimum_offset = branch_amplitude * .85
+            available_room = {
+                -1: branch_baseline_y - 3,
+                1: MAP_SIZE - 4 - branch_baseline_y,
+            }
+            directions = [
+                direction for direction, room in available_room.items()
+                if room >= minimum_offset
+            ]
+            direction = rng.choice(directions)
+            maximum_offset = min(branch_amplitude, available_room[direction])
+            offset = direction * rng.uniform(minimum_offset, maximum_offset)
+            midpoint_y = branch_baseline_y + offset
+            branch_anchors = [
+                (branch_start_x, branch_start_y),
+                (midpoint_x, midpoint_y),
+                (branch_end_x, branch_end_y),
+            ]
+            routes.append(self._smooth_road_route(branch_anchors))
+        return tuple(tuple(route) for route in routes)
+
+    @staticmethod
+    def _smooth_road_route(anchors):
+        """Interpolate ordered anchors with smooth bends, one center cell per x."""
+        route = []
+        for index, ((x0, y0), (x1, y1)) in enumerate(zip(anchors, anchors[1:])):
+            width = max(1, x1 - x0)
+            first_x = x0 if index == 0 else x0 + 1
+            for x in range(first_x, x1 + 1):
+                progress = (x - x0) / width
+                eased = progress * progress * (3.0 - 2.0 * progress)
+                y = round(y0 + (y1 - y0) * eased)
+                route.append((x, int(clamp(y, 0, MAP_SIZE - 1))))
+        return route
 
     def add_unit(self, kind, team, x, y):
         if kind not in ALL_UNIT_KINDS:
@@ -4878,13 +4988,13 @@ class Game:
                     elif event.type == pygame.KEYDOWN and event.key in (
                         pygame.K_1, pygame.K_2, pygame.K_3,
                     ):
-                        self.reset(event.key - pygame.K_0)
+                        self.start_level(event.key - pygame.K_0)
                         self.state = "playing"
                         self.update_visibility()
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         for button, number in self.level_buttons:
                             if button.rect.collidepoint(event.pos):
-                                self.reset(number)
+                                self.start_level(number)
                                 self.state = "playing"
                                 self.update_visibility()
                                 break
