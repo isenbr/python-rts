@@ -45,7 +45,7 @@ class ExistingMechanicsTests(GameTestCase):
         self.assertEqual((sword.health, sword.speed, sword.damage, sword.cooldown, sword.attack_range),
                          (100, 1, 5, .5, 1.02))
         self.assertEqual((archer.health, archer.speed, archer.damage, archer.cooldown, archer.attack_range),
-                         (20, .7, 50, 4 / 3, 5))
+                         (20, .7, 50, 2.0, 5))
         self.assertEqual(UNIT_COSTS["swordsman"], 200)
         self.assertEqual(UNIT_COSTS["archer"], 500)
         before = len(self.game.units)
@@ -63,7 +63,7 @@ class ExistingMechanicsTests(GameTestCase):
             },
             "archer": {
                 "max_health": 20, "speed": .7, "damage": 50,
-                "cooldown": 4 / 3, "attack_range": 5,
+                "cooldown": 2.0, "attack_range": 5,
             },
             "shield": {
                 "max_health": 200, "speed": .8, "damage": 5,
@@ -407,10 +407,11 @@ class ShieldPlayerFacingTests(GameTestCase):
         self.game.visible.add((15, 10))
         self.game.update_unit(attacker, 0)
         self.assertEqual(target.health, 50)
-        self.assertEqual(attacker.attack_timer, 4 / 3)
-        self.game.update_unit(attacker, 1)
+        self.assertEqual(attacker.attack_timer, 2.0)
+        self.assertEqual(attacker.movement_lock_timer, 2.0)
+        self.game.update_unit(attacker, 1.5)
         self.assertEqual(target.health, 50)
-        self.game.update_unit(attacker, 1 / 3)
+        self.game.update_unit(attacker, .5)
         self.assertEqual(target.health, 0)
 
     def test_death_and_target_cleanup(self):
@@ -491,6 +492,28 @@ class ShieldPlayerFacingTests(GameTestCase):
 
         self.assertIsNone(player.target)
         self.assertEqual((player.x, player.y), (10, 10))
+
+    def test_player_unit_continuously_switches_to_nearest_visible_enemy(self):
+        self.game.units[:] = [
+            unit for unit in self.game.units if unit.is_king_objective
+        ]
+        player = self.game.add_unit("swordsman", "green", 10, 10)
+        archer = self.game.add_unit("archer", "red", 14, 10)
+        shield = self.game.add_unit("shield", "red", 12, 10)
+        self.game.visible.update({(12, 10), (14, 10)})
+        player.target = archer
+
+        self.game.update_unit(player, 0)
+
+        self.assertIs(player.target, shield)
+
+        archer.x = 11
+        shield.x = 13
+        self.game.visible.update({(11, 10), (13, 10)})
+
+        self.game.update_unit(player, 0)
+
+        self.assertIs(player.target, archer)
 
     def test_player_attack_move_engages_then_resumes_original_order(self):
         self.game.units[:] = [
@@ -780,14 +803,14 @@ class ArcherMovementAttackTests(GameTestCase):
                 self.assertEqual(target.health, 50)
                 self.assertEqual(len(self.game.arrows), 1)
 
-    def test_continuous_stationary_firing_uses_faster_cooldown(self):
+    def test_continuous_stationary_firing_uses_two_second_cooldown(self):
         archer = self.game.add_unit("archer", "green", 10, 10)
         target = self.game.add_unit("shield", "red", 14, 10)
         self.game.visible.add((14, 10))
         self.game.update_unit(archer, 0)
         self.assertEqual(target.health, 185)
 
-        for index in range(2):
+        for index in range(3):
             self.game.update_unit(archer, .5)
             self.assertFalse(archer.moved_this_update, index)
             self.assertEqual(target.health, 185, index)
@@ -804,12 +827,12 @@ class ArcherMovementAttackTests(GameTestCase):
         archer.target_pos = (20, 10)
 
         start = (archer.x, archer.y)
-        for _ in range(2):
+        for _ in range(3):
             self.game.update_unit(archer, .6)
             self.assertEqual((archer.x, archer.y), start)
             self.assertFalse(archer.moved_this_update)
 
-        self.game.update_unit(archer, 2 / 15)
+        self.game.update_unit(archer, .2)
         self.assertTrue(archer.moved_this_update)
         self.assertGreater(archer.x, start[0])
         self.assertEqual(archer.movement_lock_timer, 0)
@@ -829,10 +852,10 @@ class ArcherMovementAttackTests(GameTestCase):
         self.assertEqual(archer.target_pos, destination)
 
         target.health = 0
-        self.game.update_unit(archer, .5)
+        self.game.update_unit(archer, 1)
         self.assertFalse(archer.moved_this_update)
         self.assertEqual(archer.target_pos, destination)
-        self.game.update_unit(archer, 5 / 6)
+        self.game.update_unit(archer, 1)
         self.assertTrue(archer.moved_this_update)
         self.assertGreater(archer.x, moved_position[0])
 
@@ -844,11 +867,11 @@ class ArcherMovementAttackTests(GameTestCase):
 
         target.x = 22
         fired_position = (archer.x, archer.y)
-        self.game.update_unit(archer, .5)
+        self.game.update_unit(archer, 1)
         self.assertEqual((archer.x, archer.y), fired_position)
         self.assertIsNotNone(archer.tactical_pos)
 
-        self.game.update_unit(archer, 5 / 6)
+        self.game.update_unit(archer, 1)
         self.assertTrue(archer.moved_this_update)
         self.assertLess(archer.x, fired_position[0])
 

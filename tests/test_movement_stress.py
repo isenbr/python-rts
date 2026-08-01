@@ -266,7 +266,9 @@ class MovementStressTests(unittest.TestCase):
             target.health = 100000
             archer.target = target
             archer.target_pos = (target.x, target.y)
-            game.visible.add((54, 100))
+            # Keep the moving target visible so this test isolates stationary
+            # ranged firing rather than player retargeting through fog.
+            game.visible = set(game.terrain)
             return game, archer
 
         _, archer, _, result = self.assert_deterministic(scenario, 8)

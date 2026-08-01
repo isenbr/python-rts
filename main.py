@@ -131,7 +131,7 @@ UNIT_STATS = {
         "max_health": 20,
         "speed": .7,
         "damage": 50,
-        "cooldown": 4 / 3,
+        "cooldown": 2.0,
         "attack_range": 5,
     },
     "shield": {
@@ -743,7 +743,7 @@ class EnemyAI:
     EMERGENCY_MELEE_THREAT = 4.0
     PRODUCTION_INTERVAL = 6.5
     PLAYER_KNOWLEDGE_TTL = 18.0
-    SCOUTING_RADIUS = 10.0
+    SCOUTING_RADIUS = UNIT_VISION_RADIUS
     KING_VISION_RADIUS = 16.0
     MIN_FRONTLINE = 2
     MISSING_BACKLINE_MIN_ARMY_SIZE = 4
@@ -3047,7 +3047,7 @@ class Game:
         target.flash = .12
         attacker.attack_timer = attacker.cooldown
         if attacker.kind == "archer":
-            attacker.movement_lock_timer = 4 / 3
+            attacker.movement_lock_timer = attacker.cooldown
             self.arrows.append([attacker.x, attacker.y, target.x, target.y, .22, attacker.team])
         elif attacker.kind == "king":
             dx, dy = target.x - attacker.x, target.y - attacker.y
@@ -3783,7 +3783,9 @@ class Game:
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
             target = auto
-        elif u.is_player_commandable and target is None:
+        elif u.is_player_commandable:
+            # Player units have no target scoring or sticky combat priority:
+            # continuously follow whichever visible enemy is nearest.
             auto = self.find_target(u, PLAYER_AUTO_ATTACK_RADIUS)
         else:
             auto = None

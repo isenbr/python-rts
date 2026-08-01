@@ -67,11 +67,42 @@ class TerrainVisibilityTests(unittest.TestCase):
     def test_enemy_observation_uses_the_same_weighted_rays(self):
         self.game.units = []
         observer = self.game.add_unit("swordsman", "red", 20, 20)
-        player = self.game.add_unit("swordsman", "green", 23, 20)
-        self.paint_ray(21, 23, "forest")
+        player = self.game.add_unit("swordsman", "green", 22, 20)
+        self.paint_ray(21, 22, "forest")
         self.assertFalse(
             self.game.enemy_ai._player_unit_is_visible(player, [observer])
         )
+
+    def test_stationary_formations_two_forest_tiles_apart_do_not_engage(self):
+        self.game.units = []
+        self.game.terrain = {
+            position: TerrainCell("forest", 0)
+            for position in self.game.terrain
+        }
+        green = [
+            self.game.add_unit("swordsman", "green", 20, y)
+            for y in (20, 21)
+        ]
+        red = [
+            self.game.add_unit("swordsman", "red", 22, y)
+            for y in (20, 21)
+        ]
+        formations = green + red
+        starting_positions = [(unit.x, unit.y) for unit in formations]
+
+        self.game.update_visibility()
+        for _ in range(20):
+            for unit in formations:
+                self.game.update_unit(unit, .25)
+
+        self.assertFalse(any(unit.target for unit in formations))
+        self.assertEqual(
+            [(unit.x, unit.y) for unit in formations], starting_positions
+        )
+        self.assertTrue(all(
+            unit.health == unit.max_health for unit in formations
+        ))
+        self.assertEqual(self.game.arrows, [])
 
     def test_enemy_cannot_target_or_damage_player_hidden_by_forest(self):
         self.game.units = []
