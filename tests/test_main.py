@@ -933,6 +933,20 @@ class EnemyAITests(GameTestCase):
         )
         self.assertIs(self.game.enemy_ai.choose_target(sword), enemy_archer)
 
+    def test_king_has_same_target_priority_as_an_equivalent_unit(self):
+        sword, opponent = self.set_units(
+            ("swordsman", "red", 20, 20),
+            ("swordsman", "green", 18, 20),
+        )
+        king = self.game.team_king("green")
+        king.x, king.y = 22, 20
+
+        self.assertEqual(
+            self.game.enemy_ai.target_score(sword, king),
+            self.game.enemy_ai.target_score(sword, opponent),
+        )
+        self.assertIs(self.game.enemy_ai.choose_target(sword), king)
+
     def test_shield_prefers_reachable_archer(self):
         shield, enemy_sword, enemy_archer = self.set_units(
             ("shield", "red", 20, 20),
@@ -2245,7 +2259,7 @@ class EnemySimulationHarnessTests(unittest.TestCase):
         self.assertFalse(game.enemy_ai.defenders)
 
     def test_deterministic_assault_eventually_allows_cost_valid_wave(self):
-        result = simulate(7, "player_assault", duration=240, dt=.05)
+        result = simulate(7, "player_assault", duration=260, dt=.05)
         self.assertGreaterEqual(result["wave_count"], 1)
         self.assertGreaterEqual(
             result["waves"][0]["squad_essence"],

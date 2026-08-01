@@ -1965,9 +1965,6 @@ class EnemyAI:
         distance = dist((unit.x, unit.y), (target.x, target.y))
         score = 100.0 - distance * 5.0
 
-        if target.is_king_objective:
-            return score - 20.0
-
         # Active attackers are urgent, especially when they threaten this unit.
         if target.target is unit:
             score += 45.0
@@ -2049,9 +2046,6 @@ class EnemyAI:
             opponent for opponent in self.game.units
             if opponent.team != unit.team and self._is_valid_target(unit, opponent)
         ]
-        if self._is_valid_target(unit, self.game.team_king("green")):
-            candidates.append(self.game.team_king("green"))
-
         current = unit.target if self._is_valid_target(unit, unit.target) else None
         if not candidates:
             unit.target = None
