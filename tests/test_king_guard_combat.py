@@ -8,6 +8,7 @@ from main import (
     ARCHER_DAMAGE_VS_KING_MULTIPLIER,
     ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
     GUARD_LEASH_DISTANCE,
+    KING_HOME_HEAL_RATE,
     KING_SLASH_LIFETIME,
     RECRUIT_FORWARD_OFFSET,
     Game,
@@ -135,6 +136,53 @@ class KingGuardCombatTests(unittest.TestCase):
         self.game.update_unit(king, 1)
         self.assertEqual((king.x, king.y), king.home_position)
         self.assertIsNone(king.target_pos)
+
+    def test_half_health_king_returns_home_and_waits_while_safe(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.x = 23
+        king.health = king.max_health / 2
+        distant_enemy = self.game.add_unit("swordsman", "red", 30, 20)
+
+        self.game.update_unit(king, 1)
+
+        self.assertTrue(king.king_recovering)
+        self.assertEqual((king.x, king.y), (22, 20))
+        self.assertIsNone(king.target)
+        self.assertEqual(distant_enemy.health, distant_enemy.max_health)
+
+    def test_recovering_king_defends_against_enemy_within_five_tiles(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health / 2
+        enemy = self.game.add_unit("swordsman", "red", 24, 20)
+
+        self.game.update_unit(king, 1)
+
+        self.assertTrue(king.king_recovering)
+        self.assertIs(king.target, enemy)
+        self.assertGreater(king.x, 20)
+
+    def test_king_heals_at_home_at_one_point_five_health_per_second(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health - 10
+
+        self.game.update_unit(king, 2)
+        self.assertEqual(king.health, king.max_health - 10 + 2 * KING_HOME_HEAL_RATE)
+
+        self.game.update_unit(king, 10)
+        self.assertEqual(king.health, king.max_health)
+        self.assertFalse(king.king_recovering)
+
+    def test_king_does_not_heal_away_from_home(self):
+        king = self.game.add_unit("king", "green", 21, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health - 10
+
+        self.game.update_unit(king, 1)
+
+        self.assertEqual(king.health, king.max_health - 10)
 
     def test_arrows_are_resisted_by_kings_and_knights_only(self):
         archer = self.game.add_unit("archer", "red", 10, 10)

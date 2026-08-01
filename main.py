@@ -102,6 +102,9 @@ UNIT_ASTAR_MAX_EXPANSIONS = 4096
 # circle so neither special unit can turn into a roaming army unit.
 DEFENDER_CHASE_RADIUS = 20.0
 GUARD_LEASH_DISTANCE = DEFENDER_CHASE_RADIUS
+KING_RECOVERY_HEALTH_RATIO = .5
+KING_RECOVERY_THREAT_RADIUS = 5.0
+KING_HOME_HEAL_RATE = 1.5
 UNIT_STATS = {
     "swordsman": {
         "max_health": 100,
@@ -402,6 +405,7 @@ class Unit:
     tactical_timer: float = 0
     moved_this_update: bool = False
     home_position: Optional[tuple[float, float]] = None
+    king_recovering: bool = False
     nav_destination: Optional[tuple[float, float]] = None
     nav_waypoints: list[tuple[float, float]] = field(default_factory=list)
     nav_waypoint_index: int = 0
@@ -2835,6 +2839,24 @@ class Game:
         """Choose the nearest enemy inside the king's home defense radius."""
         return self.autonomous_guard_target(king)
 
+    def nearby_king_recovery_threat(self, king):
+        """Choose the nearest enemy close enough to interrupt king recovery."""
+        candidates = [
+            unit for unit in self.units
+            if unit.team != king.team
+            and unit.health > 0
+            and dist((king.x, king.y), (unit.x, unit.y))
+            <= KING_RECOVERY_THREAT_RADIUS
+        ]
+        return min(
+            candidates,
+            key=lambda unit: (
+                dist((king.x, king.y), (unit.x, unit.y)),
+                unit.uid,
+            ),
+            default=None,
+        )
+
     def autonomous_guard_target(self, guard):
         """Choose the nearest enemy inside a special unit's home defense radius."""
         candidates = [
@@ -3496,6 +3518,18 @@ class Game:
             u.tactical_pos = None
             if u.home_position is None:
                 u.home_position = (u.x, u.y)
+            if u.is_king_objective:
+                if u.health <= u.max_health * KING_RECOVERY_HEALTH_RATIO:
+                    u.king_recovering = True
+                at_home = dist((u.x, u.y), u.home_position) < .08
+                if (
+                    at_home
+                    and u.health < u.max_health
+                    and not self._movement_snapshot_active
+                ):
+                    u.health = min(u.max_health, u.health + KING_HOME_HEAL_RATE * dt)
+                if u.health >= u.max_health:
+                    u.king_recovering = False
         elif not (u.is_player_commandable or u.is_enemy_ai_commandable):
             u.selected = False
             u.target = None
@@ -3518,7 +3552,24 @@ class Game:
                 u.target_pos = None
             self.clear_navigation(u)
         if u.is_king_objective or u.is_autonomous_guard:
-            target = self.autonomous_guard_target(u)
+            recovery_threat = (
+                self.nearby_king_recovery_threat(u)
+                if u.is_king_objective and u.king_recovering
+                else None
+            )
+            if u.is_king_objective and u.king_recovering and recovery_threat is None:
+                u.target = None
+                u.target_pos = u.home_position
+                if dist((u.x, u.y), u.home_position) < .08:
+                    u.x, u.y = u.home_position
+                    u.target_pos = None
+                    self.clear_navigation(u)
+                else:
+                    self.navigate_unit_toward(u, u.home_position, dt)
+                    if (u.x, u.y) == u.home_position:
+                        u.target_pos = None
+                return
+            target = recovery_threat or self.autonomous_guard_target(u)
             u.target = target
             if target is None:
                 u.target_pos = u.home_position
@@ -3627,6 +3678,18 @@ class Game:
                     break
         finally:
             self._movement_snapshot_active = False
+        for king in (
+            unit for unit in self.units
+            if unit.is_king_objective and unit.health > 0
+        ):
+            home = king.home_position or (king.x, king.y)
+            if dist((king.x, king.y), home) < .08 and king.health < king.max_health:
+                king.health = min(
+                    king.max_health,
+                    king.health + KING_HOME_HEAL_RATE * dt,
+                )
+                if king.health >= king.max_health:
+                    king.king_recovering = False
         dead_units = [unit for unit in self.units if unit.health <= 0]
         dead_green_king = any(
             unit.team == "green" and unit.is_king_objective
