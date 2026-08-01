@@ -29,6 +29,11 @@ crossing a mountain tile costs `0.75`, plains and path tiles cost `1`, and a
 forest tile costs `5`. The same terrain sight rules apply to enemy observers.
 Kill the Crimson King to win. If the Verdant King dies, you lose.
 
+Terrain also affects combat. Archers standing on mountains automatically gain
+`+1` attack range and deal `20%` more damage to targets on any non-mountain
+terrain. Units in forests take `30%` less ranged damage. Units on paths take
+`20%` more damage from every attack, while plains have no combat modifier.
+
 ## Unit navigation
 
 Move orders assign stable formation slots. Units normally travel directly

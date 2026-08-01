@@ -37,21 +37,33 @@ TERRAIN_METADATA = {
     "mountain": {
         "movement_multiplier": 0.5,
         "vision_cost": 0.75,
+        "archer_range_bonus": 1.0,
+        "ranged_damage_taken_multiplier": 1.0,
+        "damage_taken_multiplier": 1.0,
         "base_color": (105, 105, 96),
     },
     "forest": {
         "movement_multiplier": 0.75,
         "vision_cost": 5.0,
+        "archer_range_bonus": 0.0,
+        "ranged_damage_taken_multiplier": 0.7,
+        "damage_taken_multiplier": 1.0,
         "base_color": (42, 83, 49),
     },
     "path": {
         "movement_multiplier": 2.0,
         "vision_cost": 1.0,
+        "archer_range_bonus": 0.0,
+        "ranged_damage_taken_multiplier": 1.0,
+        "damage_taken_multiplier": 1.2,
         "base_color": (161, 132, 79),
     },
     "plains": {
         "movement_multiplier": 1.0,
         "vision_cost": 1.0,
+        "archer_range_bonus": 0.0,
+        "ranged_damage_taken_multiplier": 1.0,
+        "damage_taken_multiplier": 1.0,
         "base_color": (91, 132, 65),
     },
 }
@@ -1298,7 +1310,7 @@ class EnemyAI:
         attackers = [
             unit for unit in self._squad_units()
             if dist((unit.x, unit.y), (objective.x, objective.y))
-            <= unit.attack_range
+            <= self.game.effective_attack_range(unit)
         ]
         if not attackers:
             return False
@@ -1950,7 +1962,7 @@ class EnemyAI:
         if getattr(target, "team", unit.team) == unit.team:
             return False
         return dist((unit.x, unit.y), (target.x, target.y)) <= max(
-            self.AWARENESS_RADIUS, unit.attack_range
+            self.AWARENESS_RADIUS, self.game.effective_attack_range(unit)
         )
 
     def _threatens(self, target, protected):
@@ -1958,7 +1970,10 @@ class EnemyAI:
             return True
         if target.target_pos is None:
             return False
-        return dist(target.target_pos, (protected.x, protected.y)) <= protected.attack_range + 1.0
+        return (
+            dist(target.target_pos, (protected.x, protected.y))
+            <= self.game.effective_attack_range(protected) + 1.0
+        )
 
     def target_score(self, unit, target):
         """Score only locally observable targets; larger values are more desirable."""
@@ -1970,7 +1985,7 @@ class EnemyAI:
             score += 45.0
         elif self._threatens(target, unit):
             score += 28.0
-        if target.attack_range >= distance:
+        if self.game.effective_attack_range(target) >= distance:
             score += 14.0
 
         # Finishing a unit is valuable, but does not outweigh every immediate danger.
@@ -2028,7 +2043,7 @@ class EnemyAI:
                     if opponent.team != unit.team
                     and opponent.health > 0
                     and dist((unit.x, unit.y), (opponent.x, opponent.y))
-                    <= unit.attack_range
+                    <= self.game.effective_attack_range(unit)
                 ]
                 unit.target = min(
                     candidates,
@@ -2128,7 +2143,7 @@ class EnemyAI:
                 threat_distance >= self.ARCHER_DANGER_RADIUS
                 and target is not None
                 and dist((unit.x, unit.y), (target.x, target.y))
-                <= unit.attack_range
+                <= self.game.effective_attack_range(unit)
             ):
                 unit.tactical_pos = None
                 unit.tactical_timer = 0
@@ -2194,7 +2209,7 @@ class EnemyAI:
             if screen is not None and (
                 unit.target is None
                 or dist((unit.x, unit.y), (unit.target.x, unit.target.y))
-                > unit.attack_range
+                > self.game.effective_attack_range(unit)
             ):
                 _, archer, threat = screen
                 toward_x, toward_y = self._unit_vector(
@@ -2818,7 +2833,7 @@ class Game:
         if unit.team == "green":
             opponents = [u for u in opponents if self.currently_visible_enemy(u)]
         if search_radius is None:
-            search_radius = unit.attack_range
+            search_radius = self.effective_attack_range(unit)
         in_range = [
             enemy for enemy in opponents
             if dist((unit.x, unit.y), (enemy.x, enemy.y)) <= search_radius
@@ -2901,6 +2916,15 @@ class Game:
                 "knight": ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
             }.get(getattr(target, "kind", None), 1.0)
             damage *= arrow_multiplier
+            attacker_terrain = self.terrain_kind_at((attacker.x, attacker.y))
+            target_terrain = self.terrain_kind_at((target.x, target.y))
+            if attacker_terrain == "mountain" and target_terrain != "mountain":
+                damage *= 1.2
+            damage *= TERRAIN_METADATA[target_terrain][
+                "ranged_damage_taken_multiplier"
+            ]
+        target_terrain = self.terrain_kind_at((target.x, target.y))
+        damage *= TERRAIN_METADATA[target_terrain]["damage_taken_multiplier"]
         target.health -= damage
         target.flash = .12
         attacker.attack_timer = attacker.cooldown
@@ -2921,6 +2945,20 @@ class Game:
         else:
             mx, my = (attacker.x + target.x) / 2, (attacker.y + target.y) / 2
             self.particles.append([mx, my, .25, attacker.team])
+
+    def terrain_kind_at(self, position):
+        """Return gameplay terrain at a world position, defaulting to plains."""
+        x, y = clamp_to_map(position)
+        return self.terrain.get((int(x), int(y)), TerrainCell("plains", 0)).kind
+
+    def effective_attack_range(self, unit):
+        """Return a unit's current range after attacker-terrain bonuses."""
+        bonus = 0.0
+        if unit.kind == "archer":
+            bonus = TERRAIN_METADATA[self.terrain_kind_at((unit.x, unit.y))][
+                "archer_range_bonus"
+            ]
+        return unit.attack_range + bonus
 
     def terrain_cell_and_speed_multiplier(self, position):
         """Resolve gameplay terrain for an in-bounds world position safely.
@@ -3373,7 +3411,7 @@ class Game:
             dx, dy, length = 1.0, 0.0, 1.0
         # Aim slightly inside range so the movement tolerance cannot leave the
         # unit just outside combat range forever.
-        approach = max(0.0, unit.attack_range - .12)
+        approach = max(0.0, self.effective_attack_range(unit) - .12)
         return clamp_to_map((
             combat_target.x + dx / length * approach,
             combat_target.y + dy / length * approach,
@@ -3576,7 +3614,7 @@ class Game:
                         u.target_pos = None
                 return
             d = dist((u.x, u.y), (target.x, target.y))
-            if d <= u.attack_range:
+            if d <= self.effective_attack_range(u):
                 u.target_pos = None
                 self.clear_navigation(u)
                 if u.attack_timer <= 0:
@@ -3594,7 +3632,7 @@ class Game:
             search_radius = (
                 PLAYER_AUTO_ATTACK_RADIUS
                 if u.target_pos is None
-                else u.attack_range
+                else self.effective_attack_range(u)
             )
             auto = self.find_target(u, search_radius)
         else:
@@ -3615,7 +3653,7 @@ class Game:
                 u.tactical_pos = None
         if target is not None:
             d = dist((u.x, u.y), (target.x, target.y))
-            if d <= u.attack_range:
+            if d <= self.effective_attack_range(u):
                 self.clear_navigation(u)
                 if (
                     u.attack_timer <= 0
