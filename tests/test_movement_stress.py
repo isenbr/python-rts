@@ -237,7 +237,7 @@ class MovementStressTests(unittest.TestCase):
         def scenario():
             game = self.game()
             mover = game.add_unit("swordsman", "green", 20, 85)
-            blocker = game.add_unit("king", "red", 27, 88)
+            blocker = game.add_unit("king", "green", 27, 88)
             mover.target_pos = destination
             return game, (mover, blocker)
 

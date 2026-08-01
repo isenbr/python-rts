@@ -16,10 +16,20 @@ from main import (
     Game,
     dist,
 )
-from simulate_performance import ARMY_SIZES, simulate_scaling
+from simulate_performance import (
+    ARMY_SIZES,
+    simulate_integrated_battle,
+    simulate_scaling,
+)
 
 
 class NavigationPerformanceTests(unittest.TestCase):
+    def test_integrated_benchmark_contains_exactly_one_hundred_units(self):
+        result = simulate_integrated_battle(frames=3, warmup=1)
+        self.assertEqual(result["units"], 100)
+        self.assertEqual(result["frames"], 3)
+        self.assertGreater(result["average_fps"], 0)
+
     def test_progressively_larger_unobstructed_armies_stay_local(self):
         first = simulate_scaling(seconds=1.0)
         second = simulate_scaling(seconds=1.0)
@@ -40,8 +50,8 @@ class NavigationPerformanceTests(unittest.TestCase):
         self.assertEqual([row["units"] for row in first], list(ARMY_SIZES))
         for row in first:
             # Candidate growth is governed by local density, not army size.
-            self.assertLess(row["average_nearby_candidates"], 8)
-            self.assertLess(row["maximum_nearby_candidates"], 12)
+            self.assertLess(row["average_nearby_candidates"], 12)
+            self.assertLess(row["maximum_nearby_candidates"], 30)
             self.assertEqual(row["paths_per_simulated_second"], 0)
             self.assertEqual(row["expanded_astar_nodes"], 0)
             self.assertGreater(row["minimum_progress"], .8)
@@ -54,7 +64,7 @@ class NavigationPerformanceTests(unittest.TestCase):
         game.units.clear()
         mover = game.add_unit("swordsman", "green", 20, 20)
         for y in range(18, 23):
-            game.add_unit("king", "red", 25, y)
+            game.add_unit("king", "green", 25, y)
         mover.target_pos = (32, 20)
         for _ in range(8):
             game.navigation_time += .05

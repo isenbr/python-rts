@@ -27,6 +27,8 @@ shows only your king's health; the hidden Crimson King's health is never
 revealed. Sight follows a straight grid ray and spends that radius as a budget:
 crossing a mountain tile costs `0.75`, plains and path tiles cost `1`, and a
 forest tile costs `5`. The same terrain sight rules apply to enemy observers.
+Red combat vision is shared across the enemy team, but hidden player positions
+are not tracked live; enemies retain only the last position their team saw.
 Kill the Crimson King to win. If the Verdant King dies, you lose.
 
 Terrain also affects combat. Archers standing on mountains automatically gain
@@ -42,19 +44,26 @@ crowding for both armies. A slight overlap is intentional: units behave as
 soft obstacles, which keeps formations and congested melee groups moving
 without producing rigid gaps or constant jitter.
 
+Ground orders are attack-move orders. Player units engage visible enemies that
+come within five tiles, then resume their formation destinations when the fight
+ends or the target escapes.
+
 Every map cell is traversable terrain. Mountains are rugged gray ground and
 halve movement speed (`0.5x`); forests are dense green ground and slow movement
 to `0.75x`; golden paths double movement speed (`2.0x`); and open plains use the
 normal speed (`1.0x`). Visual variations within each terrain kind are cosmetic
 and never affect gameplay.
 
-Stationary units and opposing troops can trigger grid-based A* detours when a
-direct route is blocked or movement has stalled. Moving allies are treated as
-costly, passable occupancy so groups can cross. Paths are cached, refreshed
+Stationary units can trigger grid-based A* detours when a direct route is
+blocked or movement has stalled. Moving troops use combat engagement and local
+separation instead of being treated as static walls. Paths are cached, refreshed
 when their corridor changes, and invalidated immediately by a new destination
 or combat target. Routing compares travel time rather than geometric distance,
 so a longer path across faster terrain can be preferred. All movement and
 waypoints are clamped to the map.
+
+Run the integrated 100-unit update/render benchmark with
+`python3 simulate_performance.py --integrated --assert-60fps`.
 
 ## Enemy production tuning
 

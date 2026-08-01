@@ -1,0 +1,83 @@
+## Summary
+
+  - Convert player ground orders into attack-move orders that engage nearby visible enemies and then
+    resume their original formation destination.
+
+  - Require shared red-team terrain visibility before enemies can acquire, chase, or shoot player
+    units.
+
+  - Optimize the measured hotspots—navigation, visibility, targeting, and terrain rendering—to sustain
+    60 FPS with 100 total living units.
+
+  ## Implementation Changes
+
+  - Add a persistent player order_pos and target-source state to Unit, separating the player’s
+    destination from the temporary combat chase destination.
+
+  - Acquire visible enemies within the existing 5-tile player radius even while following an order.
+    Retain an automatic target while visible within a 6-tile hysteresis radius; after it dies, becomes
+    hidden, or escapes, select another nearby target or resume order_pos.
+
+  - Maintain cached visible-cell sets for both teams using identical terrain sight rules. Red combat
+    uses shared red-team visibility; strategic AI may remember last-seen information but cannot update
+    an unseen unit’s position.
+
+  - When red vision is lost, clear the live target reference, preserve only its last visible position,
+    and prevent attack() from applying damage without current team visibility.
+
+  - Replace whole-army targeting scans with spatial-hash radius queries, including nearby-archer and
+    threat scoring.
+
+  - Cache terrain LOS results by terrain revision, observer grid cell, and sight budget; reuse them for
+    player fog, red vision, and strategic knowledge.
+
+  - Stop rebuilding full dynamic occupancy for every moving unit and waypoint check. Build team
+    occupancy once per movement snapshot, validate cached routes with spatial corridor queries, and let
+    attack-move engagement/local separation handle moving opposing troops.
+
+  - Queue new A* requests deterministically by unit UID, permit at most two searches per update, and
+    use direct steering while queued so dense formations cannot create a one-frame pathfinding spike.
+
+  - Render terrain from a cached composite surface and blit only the viewport instead of issuing
+    thousands of tile blits every frame; rebuild it only when the level or zoom changes.
+
+  ## Interfaces and Compatibility
+
+  - Extend Unit with order_pos: Optional[tuple[float, float]] and automatic/explicit target-source
+    state.
+
+  - Add an internal team-aware visibility query such as is_team_visible(team, x, y) while retaining
+    visible, explored, and is_visible() as the green player-facing fog interface.
+
+  - Preserve explicit attack orders, enemy strategic states, formation slots, terrain movement rules,
+    deterministic UID ordering, and saved-free runtime behavior.
+
+  ## Test Plan
+
+  - Replace the current “player order prevents idle auto attack” expectation with tests proving
+    acquisition during movement, original-destination preservation, target-switching, leash hysteresis,
+    and order resumption after death, concealment, or escape.
+
+  - Add forest tests proving that no red unit can acquire or damage an unseen player, another red
+    observer can provide shared vision, and lost targets are pursued only to their last visible
+    location.
+
+  - Add final attack-time visibility tests so stale target references cannot bypass fog rules.
+  - Add structural performance tests for bounded spatial candidate counts, one occupancy build per
+    team/update, cached LOS reuse, deterministic A* queuing, and the two-search update limit.
+
+  - Expand simulate_performance.py with a reproducible dense-battle scenario containing exactly 100
+    total units, fixed 60 Hz updates, rendering, fog, combat targeting, and navigation. After warm-up,
+    require average frame work at or below 16.67 ms and p95 at or below 20 ms on the reference
+    environment.
+
+  - Run all existing tests after implementation; the current baseline is 345 passing tests in 187.5
+    seconds.
+
+  ## Assumptions
+
+  - “100 units” includes both armies, kings, and guards combined.
+  - Enemy combat visibility is shared across the red team.
+  - Player ground orders are attack-move orders: temporary combat does not discard the destination.
+  - Enemy strategic AI may use legitimate last-seen memory, but unseen live positions and attacks are
+    forbidden.

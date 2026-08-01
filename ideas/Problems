@@ -1,0 +1,6 @@
+There are three problems with my python-rts that I want to fix, can you create a plan to help me fix
+  them. 1. Player units are continuing to follow orders the player gave them even when there are enemies
+  within proximity that they should be targetting instead. 2. Enemy units are cheating and able to
+  target player units and shoot at them even when they shouldn't be able to see them, this is especially
+  easy to notice in the forest. 3. The game is too laggy, it should be able to support up to 100 units
+  at 60 fps.

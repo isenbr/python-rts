@@ -44,7 +44,7 @@ class PathfindingTests(unittest.TestCase):
         game = self.game()
         mover = game.add_unit("swordsman", "green", 20, 20.5)
         for y in (17.5, 18.5, 22.5, 23.5):
-            game.add_unit("shield", "red", 25.5, y)
+            game.add_unit("shield", "green", 25.5, y)
         mover.target_pos = (31, 20.5)
         self.step(game, mover, 14)
         self.assertGreater(mover.x, 29)
@@ -72,7 +72,7 @@ class PathfindingTests(unittest.TestCase):
     def test_replans_when_blocker_enters_path(self):
         game = self.game()
         mover = game.add_unit("swordsman", "green", 20, 20)
-        blocker = game.add_unit("shield", "red", 25, 24)
+        blocker = game.add_unit("shield", "green", 25, 24)
         mover.target_pos = (32, 20)
         self.step(game, mover, 1)
         before = game.path_calculation_count
@@ -85,7 +85,7 @@ class PathfindingTests(unittest.TestCase):
         game = self.game()
         mover = game.add_unit("swordsman", "green", 20, 20)
         for y in range(18, 23):
-            game.add_unit("shield", "red", 25, y)
+            game.add_unit("shield", "green", 25, y)
         mover.target_pos = (31, 20)
         self.step(game, mover, .4, .05)
         self.assertEqual(game.path_calculation_count, 1)
@@ -94,7 +94,7 @@ class PathfindingTests(unittest.TestCase):
         game = self.game()
         mover = game.add_unit("swordsman", "green", WORLD_MIN, 60.5)
         for y in range(120):
-            game.add_unit("king", "red", 1.5, y + .5)
+            game.add_unit("king", "green", 1.5, y + .5)
         mover.target_pos = (5.5, 60.5)
 
         self.step(game, mover, .4, .05)
@@ -106,7 +106,7 @@ class PathfindingTests(unittest.TestCase):
         game = self.game()
         mover = game.add_unit("swordsman", "green", WORLD_MIN, 60.5)
         blockers = [
-            game.add_unit("king", "red", 1.5, y + .5)
+            game.add_unit("king", "green", 1.5, y + .5)
             for y in range(120)
         ]
         mover.target_pos = (5.5, 60.5)
@@ -120,7 +120,7 @@ class PathfindingTests(unittest.TestCase):
     def test_new_order_replaces_cached_path(self):
         game = self.game()
         mover = game.add_unit("swordsman", "green", 20, 20)
-        game.add_unit("shield", "red", 25, 20)
+        game.add_unit("shield", "green", 25, 20)
         mover.target_pos = (31, 20)
         self.step(game, mover, .1)
         old_destination = mover.nav_destination

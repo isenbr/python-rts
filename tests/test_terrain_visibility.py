@@ -73,6 +73,47 @@ class TerrainVisibilityTests(unittest.TestCase):
             self.game.enemy_ai._player_unit_is_visible(player, [observer])
         )
 
+    def test_enemy_cannot_target_or_damage_player_hidden_by_forest(self):
+        self.game.units = []
+        archer = self.game.add_unit("archer", "red", 20, 20)
+        player = self.game.add_unit("swordsman", "green", 23, 20)
+        self.paint_ray(21, 23, "forest")
+        self.game.update_team_visibility("red")
+
+        self.game.update_unit(archer, 0)
+
+        self.assertIsNone(archer.target)
+        self.assertEqual(player.health, player.max_health)
+        self.assertEqual(self.game.arrows, [])
+
+    def test_enemy_units_share_legitimate_team_vision(self):
+        self.game.units = []
+        archer = self.game.add_unit("archer", "red", 20, 20)
+        self.game.add_unit("swordsman", "red", 23, 21)
+        player = self.game.add_unit("swordsman", "green", 23, 20)
+        self.paint_ray(21, 23, "forest")
+        self.game.update_team_visibility("red")
+
+        self.game.update_unit(archer, 0)
+
+        self.assertIs(archer.target, player)
+        self.assertLess(player.health, player.max_health)
+
+    def test_enemy_lost_target_keeps_only_last_visible_position(self):
+        self.game.units = []
+        archer = self.game.add_unit("archer", "red", 20, 20)
+        player = self.game.add_unit("swordsman", "green", 23, 20)
+        self.game.update_team_visibility("red")
+        self.game.update_unit(archer, 0)
+        last_seen = (player.x, player.y)
+
+        self.paint_ray(21, 23, "forest")
+        self.game.update_team_visibility("red")
+        self.game.update_unit(archer, 0)
+
+        self.assertIsNone(archer.target)
+        self.assertEqual(archer.target_pos, last_seen)
+
 
 if __name__ == "__main__":
     unittest.main()

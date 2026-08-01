@@ -83,6 +83,7 @@ SWORDSMAN_ATTACK_RANGE = 1.02
 UNIT_VISION_RADIUS = 8.0
 PLAYER_RECRUIT_ENGAGE_RADIUS = UNIT_VISION_RADIUS
 PLAYER_AUTO_ATTACK_RADIUS = 5.0
+PLAYER_AUTO_ATTACK_LEASH_RADIUS = 6.0
 # Shared movement geometry, steering, and path-cache timing. Units are treated
 # as soft discs: UNIT_SOFT_OVERLAP is intentional visual/physical compression,
 # so separation begins only inside the remaining minimum center distance.
@@ -109,6 +110,7 @@ UNIT_SLOT_SETTLE_RADIUS = .12
 # below a full-map flood while still allowing long routes around ordinary
 # formations.
 UNIT_ASTAR_MAX_EXPANSIONS = 4096
+UNIT_ASTAR_SEARCHES_PER_UPDATE = 2
 # Kings and knights defend a fixed area around their starting post. They may
 # acquire enemies inside this radius, but movement is clamped to the same
 # circle so neither special unit can turn into a roaming army unit.
@@ -407,7 +409,11 @@ class Unit:
     cooldown: float = field(init=False)
     attack_range: float = field(init=False)
     target_pos: Optional[tuple[float, float]] = None
+    # Player ground orders survive temporary automatic combat. ``target_pos``
+    # remains the immediate navigation destination used by both armies.
+    order_pos: Optional[tuple[float, float]] = None
     target: object = None
+    target_auto_acquired: bool = False
     attack_timer: float = 0
     movement_lock_timer: float = 0
     flash: float = 0
@@ -429,6 +435,7 @@ class Unit:
     nav_side_preference: int = 0
     nav_terrain_revision: int = -1
     nav_terrain_route: bool = False
+    nav_direct_check_timer: float = 0.0
 
     def __post_init__(self):
         try:
@@ -1081,7 +1088,7 @@ class EnemyAI:
     def _player_unit_is_visible(self, unit, observers=None):
         """Return whether current red-team vision legitimately reveals a unit."""
         if observers is None:
-            observers = self._living_red_units()
+            return self.game.is_team_visible("red", unit.x, unit.y)
         position = (unit.x, unit.y)
         red_objective = self.game.objective_position("red")
         if (
@@ -1100,12 +1107,12 @@ class EnemyAI:
 
     def _update_strategic_knowledge(self):
         """Remember only player units actually observed by red scouts or the king."""
-        observers = self._living_red_units()
+        self.game.update_team_visibility("red")
         currently_observed = set()
         for unit in sorted(self.game.units, key=lambda candidate: candidate.uid):
             if not unit.is_player_commandable:
                 continue
-            if self._player_unit_is_visible(unit, observers):
+            if self._player_unit_is_visible(unit):
                 if unit.health <= 0:
                     if (
                         unit.uid in self.player_knowledge
@@ -1961,6 +1968,8 @@ class EnemyAI:
             return False
         if getattr(target, "team", unit.team) == unit.team:
             return False
+        if not self.game.is_team_visible(unit.team, target.x, target.y):
+            return False
         return dist((unit.x, unit.y), (target.x, target.y)) <= max(
             self.AWARENESS_RADIUS, self.game.effective_attack_range(unit)
         )
@@ -2007,9 +2016,10 @@ class EnemyAI:
 
         # Locally protect fragile allied archers.
         allied_archers = [
-            ally for ally in self.game.units
+            ally for ally in self.game.nearby_units(
+                unit, self.AWARENESS_RADIUS
+            )
             if ally.team == unit.team and ally.kind == "archer" and ally.health > 0
-            and dist((unit.x, unit.y), (ally.x, ally.y)) <= self.AWARENESS_RADIUS
         ]
         if any(
             dist((target.x, target.y), (ally.x, ally.y)) <= self.ARCHER_PROTECTION_RADIUS
@@ -2032,6 +2042,8 @@ class EnemyAI:
         if not unit.is_enemy_ai_commandable:
             unit.target = None
             return None
+        if not self.game._movement_snapshot_active:
+            self.game.rebuild_unit_spatial_hash()
         # A recovering squad has received an explicit retreat order. Local
         # awareness must not turn that order back into an individual attack;
         # the strategic controller will either re-engage the whole squad or
@@ -2058,8 +2070,11 @@ class EnemyAI:
             return None
 
         candidates = [
-            opponent for opponent in self.game.units
-            if opponent.team != unit.team and self._is_valid_target(unit, opponent)
+            opponent for opponent in self.game.nearby_units(
+                unit, max(self.AWARENESS_RADIUS,
+                          self.game.effective_attack_range(unit))
+            )
+            if self._is_valid_target(unit, opponent)
         ]
         current = unit.target if self._is_valid_target(unit, unit.target) else None
         if not candidates:
@@ -2113,6 +2128,8 @@ class EnemyAI:
         if not unit.is_enemy_ai_commandable:
             unit.tactical_pos = None
             return None
+        if not self.game._movement_snapshot_active:
+            self.game.rebuild_unit_spatial_hash()
         unit.tactical_timer = max(0.0, unit.tactical_timer - dt)
         if (
             self.state == AIState.RECOVERING
@@ -2120,9 +2137,14 @@ class EnemyAI:
         ):
             unit.tactical_pos = None
             return None
+        if unit.tactical_timer > 0 and unit.tactical_pos is None:
+            return unit.tactical_pos
         opponents = [
-            other for other in self.game.units
+            other for other in self.game.nearby_units(
+                unit, self.AWARENESS_RADIUS
+            )
             if other.team != unit.team and other.health > 0
+            and self.game.is_team_visible(unit.team, other.x, other.y)
         ]
 
         if unit.kind == "archer":
@@ -2187,14 +2209,20 @@ class EnemyAI:
 
         elif unit.kind in MELEE_UNIT_KINDS:
             allied_archers = [
-                ally for ally in self.game.units
+                ally for ally in self.game.nearby_units(
+                    unit, self.AWARENESS_RADIUS
+                )
                 if ally.team == unit.team and ally.kind == "archer" and ally.health > 0
-                and dist((unit.x, unit.y), (ally.x, ally.y)) <= self.AWARENESS_RADIUS
             ]
             screen = None
             for archer in allied_archers:
                 threats = [
-                    foe for foe in opponents
+                    foe for foe in self.game.unit_spatial_hash.neighbors(
+                        (archer.x, archer.y),
+                        self.ARCHER_PROTECTION_RADIUS + 2.0,
+                    )
+                    if foe.team != unit.team and foe.health > 0
+                    and self.game.is_team_visible(unit.team, foe.x, foe.y)
                     if dist((archer.x, archer.y), (foe.x, foe.y))
                     <= self.ARCHER_PROTECTION_RADIUS + 2.0
                 ]
@@ -2222,6 +2250,7 @@ class EnemyAI:
                 return unit.tactical_pos
 
         unit.tactical_pos = None
+        unit.tactical_timer = self.TACTICAL_RECHECK
         return None
 
     def update(self, dt):
@@ -2451,10 +2480,16 @@ class Game:
         self.clamp_camera()
         self.explored = set()
         self.visible = set()
+        self.red_visible = set()
+        self._team_visibility_initialized = {"green": False, "red": False}
+        self._vision_mask_cache = {}
+        self._vision_terrain_signature = None
         self._fog_revision = 0
         self._fog_cache_key = None
         self._fog_cache_surface = None
         self._terrain_tile_cache = {}
+        self._terrain_world_cache_key = None
+        self._terrain_world_cache_surface = None
         self.drag_start = None
         self.drag_now = None
         self.arrows = []
@@ -2484,6 +2519,7 @@ class Game:
             ]
         self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
         self._movement_snapshot_active = False
+        self._path_searches_this_update = 0
         self.rebuild_unit_spatial_hash()
 
     def rebuild_unit_spatial_hash(self):
@@ -2731,15 +2767,19 @@ class Game:
             for u in selected:
                 self.clear_navigation(u)
                 u.target, u.target_pos = clicked, (clicked.x, clicked.y)
+                u.order_pos = None
+                u.target_auto_acquired = False
             return
         cols = math.ceil(math.sqrt(len(selected)))
         for i, u in enumerate(selected):
             offset = ((i % cols - (cols - 1) / 2) * 1.15, (i // cols) * 1.15)
             self.clear_navigation(u)
             u.target = None
-            u.target_pos = clamp_to_map(
+            u.target_auto_acquired = False
+            u.order_pos = clamp_to_map(
                 (world[0] + offset[0], world[1] + offset[1])
             )
+            u.target_pos = u.order_pos
 
     @staticmethod
     def clear_navigation(unit):
@@ -2754,12 +2794,33 @@ class Game:
         unit.nav_clear_time = 0.0
         unit.nav_terrain_revision = -1
         unit.nav_terrain_route = False
+        unit.nav_direct_check_timer = 0.0
+
+    def release_combat_target(self, unit):
+        """Drop a combat target and resume a surviving player ground order."""
+        unit.target = None
+        unit.target_auto_acquired = False
+        if unit.is_player_commandable and unit.order_pos is not None:
+            unit.target_pos = unit.order_pos
+        self.clear_navigation(unit)
 
     def currently_visible_enemy(self, enemy):
         return self.is_visible(enemy.x, enemy.y)
 
     def is_visible(self, x, y):
         return (int(x), int(y)) in self.visible
+
+    def is_team_visible(self, team, x, y):
+        """Return current shared terrain visibility for either combat team."""
+        if team not in self._team_visibility_initialized:
+            return False
+        # ``visible`` is also a long-standing player-facing/test-facing fog
+        # interface and may be deliberately edited between updates.
+        if team == "green":
+            return (int(x), int(y)) in self.visible
+        if not self._team_visibility_initialized[team]:
+            self.update_team_visibility(team)
+        return (int(x), int(y)) in self.red_visible
 
     def terrain_sight_cost(self, start, end):
         """Return the terrain-weighted cost of the grid ray from start to end.
@@ -2777,7 +2838,9 @@ class Game:
                 if cell[0] != previous[0] and cell[1] != previous[1]
                 else 1.0
             )
-            terrain = self.terrain.get(cell, TerrainCell("plains", 0))
+            terrain = self.terrain.get(cell)
+            if terrain is None:
+                terrain = TerrainCell("plains", 0)
             total += step_length * terrain_vision_cost(terrain.kind)
             previous = cell
         return total
@@ -2789,51 +2852,97 @@ class Game:
             return False
         return self.terrain_sight_cost(start, end) <= sight_budget
 
-    def update_visibility(self):
-        previous_visible = self.visible.copy()
-        previous_explored_count = len(self.explored)
-        if self.level_number == 1:
-            self.visible = {
-                (x, y) for x in range(MAP_SIZE) for y in range(MAP_SIZE)
-            }
-            self.explored = self.visible.copy()
-            if (
-                self.visible != previous_visible
-                or len(self.explored) != previous_explored_count
-            ):
-                self._fog_revision += 1
-            return
-        self.visible.clear()
-        green_king = self.team_king("green")
-        sources = (
-            [(green_king.x, green_king.y, self.enemy_ai.KING_VISION_RADIUS)]
-            if green_king is not None else []
-        )
-        sources += [
-            (u.x, u.y, UNIT_VISION_RADIUS)
-            for u in self.units if u.is_player_commandable
-        ]
+    def _vision_mask(self, start, sight_budget):
+        """Return a cached sight mask for one observer grid cell."""
+        observer_cell = self._nav_cell(start)
+        key = (self.terrain_revision, observer_cell, float(sight_budget))
+        cached = self._vision_mask_cache.get(key)
+        if cached is not None:
+            return cached
         cheapest_vision_cost = min(
             terrain_vision_cost(kind) for kind in TERRAIN_KINDS
         )
-        for sx, sy, sight_budget in sources:
-            max_distance = sight_budget / cheapest_vision_cost
-            for x in range(max(0, int(sx - max_distance)), min(MAP_SIZE, int(sx + max_distance) + 1)):
-                for y in range(max(0, int(sy - max_distance)), min(MAP_SIZE, int(sy + max_distance) + 1)):
-                    if self.has_terrain_line_of_sight(
-                        (sx, sy), (x, y), sight_budget
-                    ):
-                        self.visible.add((x, y))
+        max_distance = sight_budget / cheapest_vision_cost
+        sx, sy = observer_cell
+        mask = set()
+        for x in range(
+            max(0, int(sx - max_distance)),
+            min(MAP_SIZE, int(sx + max_distance) + 1),
+        ):
+            for y in range(
+                max(0, int(sy - max_distance)),
+                min(MAP_SIZE, int(sy + max_distance) + 1),
+            ):
+                if self.has_terrain_line_of_sight(
+                    observer_cell, (x, y), sight_budget
+                ):
+                    mask.add((x, y))
+        self._vision_mask_cache[key] = frozenset(mask)
+        return self._vision_mask_cache[key]
+
+    def _refresh_vision_terrain_signature(self):
+        """Invalidate masks when tests or tools replace terrain in place."""
+        signature = hash(tuple(
+            self.terrain[(x, y)].kind
+            for x in range(MAP_SIZE) for y in range(MAP_SIZE)
+        ))
+        if signature != self._vision_terrain_signature:
+            self._vision_mask_cache.clear()
+            self._vision_terrain_signature = signature
+
+    def update_team_visibility(self, team, refresh_terrain=True):
+        """Refresh one team's shared sight map using cached observer masks."""
+        if refresh_terrain:
+            self._refresh_vision_terrain_signature()
+        if team == "green" and self.level_number == 1:
+            cells = {(x, y) for x in range(MAP_SIZE) for y in range(MAP_SIZE)}
+        else:
+            king = self.team_king(team)
+            sources = (
+                [(king.x, king.y, self.enemy_ai.KING_VISION_RADIUS)]
+                if king is not None else []
+            )
+            sources += [
+                (
+                    unit.x,
+                    unit.y,
+                    self.enemy_ai.SCOUTING_RADIUS
+                    if team == "red" else UNIT_VISION_RADIUS,
+                )
+                for unit in self.units
+                if unit.team == team and unit.is_purchasable_army_unit
+                and unit.health > 0
+            ]
+            cells = set()
+            for sx, sy, sight_budget in sources:
+                cells.update(self._vision_mask((sx, sy), sight_budget))
+        if team == "green":
+            self.visible = cells
+        else:
+            self.red_visible = cells
+        self._team_visibility_initialized[team] = True
+        return cells
+
+    def update_visibility(self):
+        previous_visible = self.visible.copy()
+        previous_explored_count = len(self.explored)
+        self._refresh_vision_terrain_signature()
+        self.update_team_visibility("green", refresh_terrain=False)
+        self.update_team_visibility("red", refresh_terrain=False)
         self.explored.update(self.visible)
         if self.visible != previous_visible or len(self.explored) != previous_explored_count:
             self._fog_revision += 1
 
     def find_target(self, unit, search_radius=None):
-        opponents = [u for u in self.units if u.team != unit.team and u.health > 0]
-        if unit.team == "green":
-            opponents = [u for u in opponents if self.currently_visible_enemy(u)]
         if search_radius is None:
             search_radius = self.effective_attack_range(unit)
+        if not self._movement_snapshot_active:
+            self.rebuild_unit_spatial_hash()
+        opponents = [
+            candidate for candidate in self.nearby_units(unit, search_radius)
+            if candidate.team != unit.team and candidate.health > 0
+            and self.is_team_visible(unit.team, candidate.x, candidate.y)
+        ]
         in_range = [
             enemy for enemy in opponents
             if dist((unit.x, unit.y), (enemy.x, enemy.y)) <= search_radius
@@ -2871,6 +2980,10 @@ class Game:
         candidates = [
             unit for unit in self.units
             if self.is_valid_guard_target(guard, unit)
+            and (
+                guard.team != "red"
+                or self.is_team_visible("red", unit.x, unit.y)
+            )
         ]
         return min(
             candidates,
@@ -2907,6 +3020,11 @@ class Game:
 
     def attack(self, attacker, target):
         if attacker.health <= 0 or target.health <= 0:
+            return
+        if (
+            attacker.team == "red"
+            and not self.is_team_visible("red", target.x, target.y)
+        ):
             return
         damage = attacker.damage
         if attacker.kind == "archer":
@@ -2949,7 +3067,8 @@ class Game:
     def terrain_kind_at(self, position):
         """Return gameplay terrain at a world position, defaulting to plains."""
         x, y = clamp_to_map(position)
-        return self.terrain.get((int(x), int(y)), TerrainCell("plains", 0)).kind
+        cell = self.terrain.get((int(x), int(y)))
+        return "plains" if cell is None else cell.kind
 
     def effective_attack_range(self, unit):
         """Return a unit's current range after attacker-terrain bonuses."""
@@ -3237,7 +3356,9 @@ class Game:
         """
         diagonal = current[0] != neighbor[0] and current[1] != neighbor[1]
         length = math.sqrt(2) if diagonal else 1.0
-        cell = self.terrain.get(neighbor, TerrainCell("plains", 0))
+        cell = self.terrain.get(neighbor)
+        if cell is None:
+            cell = TerrainCell("plains", 0)
         return length / terrain_movement_multiplier(cell.kind)
 
     def _terrain_corridor_cost(self, start, end):
@@ -3260,7 +3381,8 @@ class Game:
         max_y = min(MAP_SIZE - 1, max(start_cell[1], end_cell[1]) + radius)
         return any(
             terrain_movement_multiplier(
-                self.terrain.get((x, y), TerrainCell("plains", 0)).kind
+                self.terrain[(x, y)].kind
+                if (x, y) in self.terrain else "plains"
             ) != 1.0
             for x in range(min_x, max_x + 1)
             for y in range(min_y, max_y + 1)
@@ -3278,13 +3400,15 @@ class Game:
         ):
             if other is mover or other is combat_target or other.health <= 0:
                 continue
-            moving_ally = (
-                other.team == mover.team
-                and other.target_pos is not None
+            moving_unit = (
+                other.target_pos is not None
                 and other.speed > 0
                 and not other.is_king_objective
             )
-            if moving_ally:
+            # Moving armies resolve one another through attack-move targeting
+            # and local separation. Treating every opponent as a static wall
+            # launches an A* search for almost every unit in a dense battle.
+            if moving_unit:
                 continue
             # The exact destination remains enterable even when occupied.
             if dist((other.x, other.y), end) < clearance * .5:
@@ -3448,24 +3572,31 @@ class Game:
             # Keep equivalent detours on one deterministic side for the life
             # of this strategic destination.
             unit.nav_side_preference = -1 if unit.uid % 2 else 1
-
-        direct_clear = self._direct_unit_corridor_clear(
-            unit, (unit.x, unit.y), final, combat_target
-        )
         next_waypoint = (
             unit.nav_waypoints[unit.nav_waypoint_index]
             if unit.nav_waypoint_index < len(unit.nav_waypoints) else None
         )
+        unit.nav_direct_check_timer = max(
+            0.0, unit.nav_direct_check_timer - max(0.0, dt)
+        )
+        if (
+            not destination_changed
+            and next_waypoint is None
+            and unit.nav_direct_check_timer > 0
+        ):
+            direct_clear = True
+        else:
+            direct_clear = self._direct_unit_corridor_clear(
+                unit, (unit.x, unit.y), final, combat_target
+            )
+            unit.nav_direct_check_timer = .12
         # Occupancy is only needed to create or validate a detour.  The common
         # unobstructed case has already been decided by exact unit geometry.
-        hard, _ = (
-            self._navigation_occupancy(unit, final, combat_target)
-            if not direct_clear or next_waypoint is not None
-            else (set(), {})
-        )
         next_blocked = (
             next_waypoint is not None
-            and not self._corridor_clear((unit.x, unit.y), next_waypoint, hard)
+            and not self._direct_unit_corridor_clear(
+                unit, (unit.x, unit.y), next_waypoint, combat_target
+            )
         )
         last_progress = unit.nav_last_progress_position or (unit.x, unit.y)
         progress = dist(last_progress, (unit.x, unit.y))
@@ -3501,7 +3632,16 @@ class Game:
                 )
             )
         )
-        if need_path:
+        if (
+            need_path
+            and (
+                not self._movement_snapshot_active
+                or self._path_searches_this_update
+                < UNIT_ASTAR_SEARCHES_PER_UPDATE
+            )
+        ):
+            if self._movement_snapshot_active:
+                self._path_searches_this_update += 1
             waypoints, _ = self._astar(unit, final, combat_target)
             self.path_calculation_count += 1
             self.path_calculation_lengths.append(
@@ -3542,6 +3682,8 @@ class Game:
             u.selected = False
             u.target = None
             u.target_pos = None
+            u.order_pos = None
+            u.target_auto_acquired = False
             u.tactical_pos = None
             self.clear_navigation(u)
             return
@@ -3576,13 +3718,28 @@ class Game:
         target = u.target
         if target is not None and getattr(target, "health", 0) <= 0:
             dead_target_position = (target.x, target.y)
-            u.target = target = None
+            was_auto = u.target_auto_acquired
+            self.release_combat_target(u)
+            target = None
             if (
+                not (was_auto and u.order_pos is not None)
+                and
                 u.target_pos is not None
                 and dist(u.target_pos, dead_target_position) <= .35
             ):
                 u.target_pos = None
-            self.clear_navigation(u)
+        if (
+            u.is_player_commandable
+            and target is not None
+            and u.target_auto_acquired
+            and (
+                not self.is_team_visible("green", target.x, target.y)
+                or dist((u.x, u.y), (target.x, target.y))
+                > PLAYER_AUTO_ATTACK_LEASH_RADIUS
+            )
+        ):
+            self.release_combat_target(u)
+            target = None
         if u.is_king_objective or u.is_autonomous_guard:
             recovery_threat = (
                 self.nearby_king_recovery_threat(u)
@@ -3625,21 +3782,20 @@ class Game:
             return
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
+            target = auto
         elif u.is_player_commandable and target is None:
-            # Idle units seek nearby enemies. A unit following a move order
-            # retains the existing attack-move behavior, firing only when an
-            # enemy is already inside its weapon range without diverting.
-            search_radius = (
-                PLAYER_AUTO_ATTACK_RADIUS
-                if u.target_pos is None
-                else self.effective_attack_range(u)
-            )
-            auto = self.find_target(u, search_radius)
+            auto = self.find_target(u, PLAYER_AUTO_ATTACK_RADIUS)
         else:
             auto = None
         if auto is not None:
             target = auto
             u.target = auto
+            if u.is_player_commandable:
+                u.target_auto_acquired = True
+            elif u.is_enemy_ai_commandable:
+                # This snapshot is the only pursuit information retained if
+                # shared red vision is lost on a later update.
+                u.target_pos = (auto.x, auto.y)
         tactical_pos = (
             self.enemy_ai.tactical_destination(u, dt)
             if u.is_enemy_ai_commandable else None
@@ -3671,6 +3827,12 @@ class Game:
                     )
                 ):
                     u.target_pos = None
+                    if (
+                        target is None
+                        and u.is_player_commandable
+                        and u.order_pos is not None
+                    ):
+                        u.order_pos = None
                     self.clear_navigation(u)
             elif not movement_locked:
                 self.navigate_unit_toward(u, u.target_pos, dt, target)
@@ -3684,6 +3846,7 @@ class Game:
             return
         self.message_time = max(0, self.message_time - dt)
         self.navigation_time += max(0.0, dt)
+        self._path_searches_this_update = 0
         self.essence += 20 * dt
         self.enemy_essence += 20 * dt
         if self.level.enemy_ai == "full":
@@ -3748,13 +3911,15 @@ class Game:
                 self.enemy_ai.forget_player_unit(unit.uid)
             if unit.target is not None and getattr(unit.target, "health", 0) <= 0:
                 dead_target_position = (unit.target.x, unit.target.y)
-                unit.target = None
+                was_auto = unit.target_auto_acquired
+                self.release_combat_target(unit)
                 if (
+                    not (was_auto and unit.order_pos is not None)
+                    and
                     unit.target_pos is not None
                     and dist(unit.target_pos, dead_target_position) <= .35
                 ):
                     unit.target_pos = None
-                self.clear_navigation(unit)
         self.units[:] = [u for u in self.units if u.health > 0]
         living_targets = set(id(unit) for unit in self.units)
         for unit in self.units:
@@ -3762,9 +3927,7 @@ class Game:
                 id(unit.target) not in living_targets
                 or getattr(unit.target, "health", 0) <= 0
             ):
-                unit.target = None
-                unit.target_pos = None
-                self.clear_navigation(unit)
+                self.release_combat_target(unit)
         for a in self.arrows:
             a[4] -= dt
         self.arrows[:] = [a for a in self.arrows if a[4] > 0]
@@ -3796,26 +3959,35 @@ class Game:
         w, h = self.screen.get_size()
         view_h = h - HUD_H
         self.screen.fill((70, 101, 55), pygame.Rect(0, 0, w, max(0, view_h)))
-        left, top = self.screen_to_world((0, 0))
-        right, bottom = self.screen_to_world((w, view_h))
-        x0, x1 = math.floor(left) - 1, math.ceil(right) + 1
-        y0, y1 = math.floor(top) - 1, math.ceil(bottom) + 1
         old_clip = self.screen.get_clip()
         self.screen.set_clip(pygame.Rect(0, 0, w, max(0, view_h)))
-        for x in range(max(0, x0), min(MAP_SIZE, x1)):
-            sx0 = round(self.world_to_screen(x, 0)[0])
-            sx1 = round(self.world_to_screen(x + 1, 0)[0])
-            for y in range(max(0, y0), min(MAP_SIZE, y1)):
-                sy0 = round(self.world_to_screen(0, y)[1])
-                sy1 = round(self.world_to_screen(0, y + 1)[1])
-                cell = self.terrain[(x, y)]
-                tile_surface = self.terrain_tile_surface(
-                    cell.kind, cell.variation, (sx1 - sx0, sy1 - sy0),
-                    detailed=self.zoom >= TERRAIN_DETAIL_MIN_ZOOM,
-                )
-                self.screen.blit(tile_surface, (sx0, sy0))
+        cache_key = (self.terrain_revision, MAP_SIZE, self.zoom)
+        if cache_key != self._terrain_world_cache_key:
+            world_size = max(1, round(MAP_SIZE * self.zoom))
+            world = pygame.Surface((world_size, world_size))
+            detailed = self.zoom >= TERRAIN_DETAIL_MIN_ZOOM
+            for x in range(MAP_SIZE):
+                sx0, sx1 = round(x * self.zoom), round((x + 1) * self.zoom)
+                for y in range(MAP_SIZE):
+                    sy0, sy1 = round(y * self.zoom), round((y + 1) * self.zoom)
+                    cell = self.terrain[(x, y)]
+                    tile_surface = self.terrain_tile_surface(
+                        cell.kind, cell.variation,
+                        (sx1 - sx0, sy1 - sy0), detailed=detailed,
+                    )
+                    world.blit(tile_surface, (sx0, sy0))
+            self._terrain_world_cache_surface = world
+            self._terrain_world_cache_key = cache_key
         border = self.world_to_screen(0, 0)
-        pygame.draw.rect(self.screen, (39, 54, 35), (border[0], border[1], MAP_SIZE * self.zoom, MAP_SIZE * self.zoom), max(2, int(self.zoom * .15)))
+        self.screen.blit(
+            self._terrain_world_cache_surface,
+            (round(border[0]), round(border[1])),
+        )
+        pygame.draw.rect(
+            self.screen, (39, 54, 35),
+            (border[0], border[1], MAP_SIZE * self.zoom, MAP_SIZE * self.zoom),
+            max(2, int(self.zoom * .15)),
+        )
         self.screen.set_clip(old_clip)
 
     def terrain_tile_surface(self, kind, variation, size, detailed=None):

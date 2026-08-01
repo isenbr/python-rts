@@ -492,18 +492,29 @@ class ShieldPlayerFacingTests(GameTestCase):
         self.assertIsNone(player.target)
         self.assertEqual((player.x, player.y), (10, 10))
 
-    def test_player_order_prevents_idle_auto_attack(self):
+    def test_player_attack_move_engages_then_resumes_original_order(self):
         self.game.units[:] = [
             unit for unit in self.game.units if unit.is_king_objective
         ]
         player = self.game.add_unit("swordsman", "green", 10, 10)
         enemy = self.game.add_unit("swordsman", "red", 12, 10)
         self.game.visible.add((int(enemy.x), int(enemy.y)))
-        player.target_pos = (10, 20)
+        player.selected = True
+        destination = (10, 20)
+        self.game.issue_order(destination)
 
         self.game.update_unit(player, .25)
 
+        self.assertIs(player.target, enemy)
+        self.assertTrue(player.target_auto_acquired)
+        self.assertEqual(player.order_pos, destination)
+        self.assertGreater(player.x, 10)
+
+        enemy.health = 0
+        self.game.update_unit(player, .25)
         self.assertIsNone(player.target)
+        self.assertEqual(player.target_pos, destination)
+        self.assertEqual(player.order_pos, destination)
         self.assertGreater(player.y, 10)
 
     def test_pause_resume_preserves_match_and_stops_simulation(self):
@@ -1028,13 +1039,13 @@ class EnemyAITests(GameTestCase):
 
     def test_base_defense_threat_receives_increased_priority(self):
         defender, base_threat, other_threat = self.set_units(
-            ("archer", "red", 172, 100),
-            ("swordsman", "green", 170, 100),
-            ("swordsman", "green", 169, 100),
+            ("archer", "red", 108, 100),
+            ("swordsman", "green", 106, 100),
+            ("swordsman", "green", 105, 100),
         )
         # Equidistant threats differ only in whether they endanger the king.
-        self.game.team_king("red").x = 184
-        base_threat.x = 175
+        self.game.team_king("red").x = 119
+        base_threat.x = 111
         self.assertIs(self.game.enemy_ai.choose_target(defender), base_threat)
 
 
