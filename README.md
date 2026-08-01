@@ -22,9 +22,12 @@ python3 main.py
 - **Esc** pauses; **R** restarts after victory or defeat.
 
 Fog is explored permanently, but only currently visible enemies can be seen.
-Friendly army units reveal 8 tiles and the Verdant King reveals 12. The HUD
+Friendly army units have a sight budget of 8 and the Verdant King has 16. The HUD
 shows only your king's health; the hidden Crimson King's health is never
-revealed. Kill the Crimson King to win. If the Verdant King dies, you lose.
+revealed. Sight follows a straight grid ray and spends that radius as a budget:
+crossing a mountain tile costs `0.75`, plains and path tiles cost `1`, and a
+forest tile costs `5`. The same terrain sight rules apply to enemy observers.
+Kill the Crimson King to win. If the Verdant King dies, you lose.
 
 ## Unit navigation
 

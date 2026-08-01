@@ -36,18 +36,22 @@ TERRAIN_KINDS = ("mountain", "forest", "path", "plains")
 TERRAIN_METADATA = {
     "mountain": {
         "movement_multiplier": 0.5,
+        "vision_cost": 0.75,
         "base_color": (105, 105, 96),
     },
     "forest": {
         "movement_multiplier": 0.75,
+        "vision_cost": 5.0,
         "base_color": (42, 83, 49),
     },
     "path": {
         "movement_multiplier": 2.0,
+        "vision_cost": 1.0,
         "base_color": (161, 132, 79),
     },
     "plains": {
         "movement_multiplier": 1.0,
+        "vision_cost": 1.0,
         "base_color": (91, 132, 65),
     },
 }
@@ -232,6 +236,11 @@ class TerrainCell:
 def terrain_movement_multiplier(kind):
     """Return gameplay speed metadata without consulting visual variation."""
     return TERRAIN_METADATA[kind]["movement_multiplier"]
+
+
+def terrain_vision_cost(kind):
+    """Return the sight-budget cost of crossing one tile of terrain."""
+    return TERRAIN_METADATA[kind]["vision_cost"]
 
 
 LEVELS = {
@@ -1061,11 +1070,15 @@ class EnemyAI:
         red_objective = self.game.objective_position("red")
         if (
             red_objective is not None
-            and dist(position, red_objective) <= self.KING_VISION_RADIUS
+            and self.game.has_terrain_line_of_sight(
+                red_objective, position, self.KING_VISION_RADIUS
+            )
         ):
             return True
         return any(
-            dist(position, (observer.x, observer.y)) <= self.SCOUTING_RADIUS
+            self.game.has_terrain_line_of_sight(
+                (observer.x, observer.y), position, self.SCOUTING_RADIUS
+            )
             for observer in observers
         )
 
@@ -2735,6 +2748,34 @@ class Game:
     def is_visible(self, x, y):
         return (int(x), int(y)) in self.visible
 
+    def terrain_sight_cost(self, start, end):
+        """Return the terrain-weighted cost of the grid ray from start to end.
+
+        The observer's own cell is not crossed and therefore has no cost. Each
+        subsequent cell charges its terrain cost, scaled by the cardinal or
+        diagonal distance used to enter it.
+        """
+        cells = self._corridor_cells(start, end)
+        total = 0.0
+        previous = cells[0]
+        for cell in cells[1:]:
+            step_length = (
+                math.sqrt(2)
+                if cell[0] != previous[0] and cell[1] != previous[1]
+                else 1.0
+            )
+            terrain = self.terrain.get(cell, TerrainCell("plains", 0))
+            total += step_length * terrain_vision_cost(terrain.kind)
+            previous = cell
+        return total
+
+    def has_terrain_line_of_sight(self, start, end, sight_budget):
+        """Return whether a terrain-weighted grid ray fits the sight budget."""
+        end_cell = self._nav_cell(end)
+        if not (0 <= end_cell[0] < MAP_SIZE and 0 <= end_cell[1] < MAP_SIZE):
+            return False
+        return self.terrain_sight_cost(start, end) <= sight_budget
+
     def update_visibility(self):
         previous_visible = self.visible.copy()
         previous_explored_count = len(self.explored)
@@ -2759,10 +2800,16 @@ class Game:
             (u.x, u.y, UNIT_VISION_RADIUS)
             for u in self.units if u.is_player_commandable
         ]
-        for sx, sy, radius in sources:
-            for x in range(max(0, int(sx - radius)), min(MAP_SIZE, int(sx + radius) + 1)):
-                for y in range(max(0, int(sy - radius)), min(MAP_SIZE, int(sy + radius) + 1)):
-                    if (x - sx) ** 2 + (y - sy) ** 2 <= radius ** 2:
+        cheapest_vision_cost = min(
+            terrain_vision_cost(kind) for kind in TERRAIN_KINDS
+        )
+        for sx, sy, sight_budget in sources:
+            max_distance = sight_budget / cheapest_vision_cost
+            for x in range(max(0, int(sx - max_distance)), min(MAP_SIZE, int(sx + max_distance) + 1)):
+                for y in range(max(0, int(sy - max_distance)), min(MAP_SIZE, int(sy + max_distance) + 1)):
+                    if self.has_terrain_line_of_sight(
+                        (sx, sy), (x, y), sight_budget
+                    ):
                         self.visible.add((x, y))
         self.explored.update(self.visible)
         if self.visible != previous_visible or len(self.explored) != previous_explored_count:

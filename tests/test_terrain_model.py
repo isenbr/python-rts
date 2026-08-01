@@ -48,6 +48,17 @@ class TerrainModelTests(unittest.TestCase):
                     main.terrain_movement_multiplier(cell.kind), multiplier
                 )
 
+    def test_exact_vision_costs(self):
+        expected = {
+            "mountain": 0.75,
+            "forest": 5.0,
+            "path": 1.0,
+            "plains": 1.0,
+        }
+        for kind, cost in expected.items():
+            self.assertEqual(TERRAIN_METADATA[kind]["vision_cost"], cost)
+            self.assertEqual(main.terrain_vision_cost(kind), cost)
+
     def test_generation_is_deterministic_across_reset_and_instances(self):
         game = Game(terrain_seed=8128)
         first = dict(game.terrain)
