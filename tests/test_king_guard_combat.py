@@ -9,6 +9,7 @@ from main import (
     ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
     GUARD_LEASH_DISTANCE,
     KING_HOME_HEAL_RATE,
+    KING_RECOVERY_ENGAGEMENT_RADIUS,
     KING_SLASH_LIFETIME,
     RECRUIT_FORWARD_OFFSET,
     Game,
@@ -151,16 +152,107 @@ class KingGuardCombatTests(unittest.TestCase):
         self.assertIsNone(king.target)
         self.assertEqual(distant_enemy.health, distant_enemy.max_health)
 
-    def test_recovering_king_defends_against_enemy_within_five_tiles(self):
+    def test_recovering_king_ignores_nearby_enemy_and_returns_home(self):
         king = self.game.add_unit("king", "green", 20, 20)
         king.home_position = (20, 20)
+        king.x = 23
         king.health = king.max_health / 2
         enemy = self.game.add_unit("swordsman", "red", 24, 20)
+        king.target = enemy
+        king.target_pos = (enemy.x, enemy.y)
 
         self.game.update_unit(king, 1)
 
         self.assertTrue(king.king_recovering)
-        self.assertIs(king.target, enemy)
+        self.assertIsNone(king.target)
+        self.assertEqual((king.x, king.y), (22, 20))
+        self.assertEqual(enemy.health, enemy.max_health)
+
+    def test_damage_reaching_half_health_immediately_cancels_king_combat(self):
+        king = self.game.add_unit("king", "green", 23, 20)
+        king.home_position = (20, 20)
+        attacker = self.game.add_unit("swordsman", "red", 24, 20)
+        target = self.game.add_unit("swordsman", "red", 25, 20)
+        king.health = king.max_health / 2 + attacker.damage
+        king.target = target
+        king.target_pos = (target.x, target.y)
+        king.nav_destination = (target.x, target.y)
+        king.nav_waypoints = [(24, 20)]
+
+        self.game.attack(attacker, king)
+
+        self.assertEqual(king.health, king.max_health / 2)
+        self.assertTrue(king.king_recovering)
+        self.assertIsNone(king.target)
+        self.assertEqual(king.target_pos, king.home_position)
+        self.assertIsNone(king.nav_destination)
+        self.assertEqual(king.nav_waypoints, [])
+
+    def test_returned_recovering_king_uses_seven_tile_engagement_radius(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health / 2
+        inside = self.game.add_unit(
+            "swordsman", "red",
+            20 + KING_RECOVERY_ENGAGEMENT_RADIUS, 20,
+        )
+        outside = self.game.add_unit(
+            "swordsman", "red",
+            20 + KING_RECOVERY_ENGAGEMENT_RADIUS + .1, 20,
+        )
+
+        self.game.update_unit(king, 1)
+
+        self.assertTrue(king.king_recovery_home_reached)
+        self.assertIs(king.target, inside)
+        self.assertGreater(king.x, 20)
+        self.assertLessEqual(
+            dist(king.home_position, (king.x, king.y)),
+            KING_RECOVERY_ENGAGEMENT_RADIUS,
+        )
+        self.assertEqual(outside.health, outside.max_health)
+
+    def test_returned_recovering_king_ignores_enemy_beyond_seven_tiles(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health / 2
+        outside = self.game.add_unit(
+            "swordsman", "red",
+            20 + KING_RECOVERY_ENGAGEMENT_RADIUS + .1, 20,
+        )
+
+        self.game.update_unit(king, 1)
+
+        self.assertTrue(king.king_recovery_home_reached)
+        self.assertEqual(
+            self.game.special_unit_engagement_radius(king),
+            KING_RECOVERY_ENGAGEMENT_RADIUS,
+        )
+        self.assertIsNone(king.target)
+        self.assertEqual((king.x, king.y), king.home_position)
+        self.assertEqual(outside.health, outside.max_health)
+
+    def test_full_health_restores_king_normal_engagement_radius(self):
+        king = self.game.add_unit("king", "green", 20, 20)
+        king.home_position = (20, 20)
+        king.health = king.max_health - KING_HOME_HEAL_RATE
+        king.king_recovering = True
+        king.king_recovery_home_reached = True
+        target = self.game.add_unit(
+            "swordsman", "red",
+            20 + KING_RECOVERY_ENGAGEMENT_RADIUS + 1, 20,
+        )
+
+        self.game.update_unit(king, 1)
+
+        self.assertEqual(king.health, king.max_health)
+        self.assertFalse(king.king_recovering)
+        self.assertFalse(king.king_recovery_home_reached)
+        self.assertEqual(
+            self.game.special_unit_engagement_radius(king),
+            GUARD_LEASH_DISTANCE,
+        )
+        self.assertIs(king.target, target)
         self.assertGreater(king.x, 20)
 
     def test_king_heals_at_home_at_one_point_five_health_per_second(self):

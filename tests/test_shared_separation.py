@@ -172,6 +172,11 @@ class SharedSeparationTests(unittest.TestCase):
             starts = [(unit.x, unit.y) for unit in units]
             for unit in units:
                 unit.target_pos = (30, 20)
+            # This is a movement-only stress scenario. Keep both teams blind
+            # so automatic in-range combat does not replace their destinations.
+            game._team_visibility_initialized = {"green": True, "red": True}
+            game.visible.clear()
+            game.red_visible.clear()
             self.advance_units(game, units, dt, 3)
             progress = sum(
                 current[0] - start[0]

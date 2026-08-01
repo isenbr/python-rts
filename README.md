@@ -36,6 +36,11 @@ Terrain also affects combat. Archers standing on mountains automatically gain
 terrain. Units in forests take `30%` less ranged damage. Units on paths take
 `20%` more damage from every attack, while plains have no combat modifier.
 
+When either king reaches half health, he immediately abandons combat and
+returns to his starting position. Nearby enemies cannot interrupt this return;
+once home, the king heals and may attack or chase only inside a seven-tile
+perimeter. His normal engagement range returns at full health.
+
 ## Unit navigation
 
 Move orders assign stable formation slots. Units normally travel directly
@@ -97,8 +102,9 @@ best affordable emergency alternative.
 Enemy attack-wave decisions use this order:
 
 1. Hard-safety rules end the attack first, including no viable combat units or no valid and reachable objective.
-2. A casualty-triggered retreat is overridden only by a current assessment (no older than the evaluator's one-second refresh interval), using non-stale opponent intelligence, when the enemy's measured combat-strength ratio is strictly greater than `EnemyAI.CASUALTY_ADVANTAGE_MARGIN` (currently `1.5`). Casualty changes invalidate the assessment cache and force immediate reevaluation.
-3. A weaker assessment causes retreat.
-4. Missing, uncertain, or stale evidence uses the conservative fallback: a casualty-hit attacker retreats (and an already recovering group remains at its rally point).
+2. Once any living attack-squad member is within 20 tiles of the Verdant King, the wave remains committed and cannot take a casualty- or strength-triggered retreat.
+3. A casualty-triggered retreat is otherwise overridden only by a current assessment (no older than the evaluator's one-second refresh interval), using non-stale opponent intelligence, when the enemy's measured combat-strength ratio is strictly greater than `EnemyAI.CASUALTY_ADVANTAGE_MARGIN` (currently `1.5`). Casualty changes invalidate the assessment cache and force immediate reevaluation.
+4. A weaker assessment causes retreat.
+5. Missing, uncertain, or stale evidence uses the conservative fallback: a casualty-hit attacker retreats (and an already recovering group remains at its rally point).
 
-The override is limited to the casualty trigger; defense recalls and all other retreat or termination rules retain their normal behavior.
+The strong-evidence override is limited to the casualty trigger. The 20-tile commitment rule blocks both casualty and strength retreats, but defense recalls and hard-safety termination rules retain their normal behavior.

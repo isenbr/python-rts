@@ -51,6 +51,25 @@ class CombatStateTransitionTests(unittest.TestCase):
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RECOVERING)
 
+    def test_weaker_group_cannot_retreat_within_twenty_tiles_of_player_king(self):
+        red, _ = self.attack(1, 4)
+        king = self.game.team_king("green")
+        king.x, king.y = red[0].x + self.ai.OBJECTIVE_COMMITMENT_RADIUS, red[0].y
+
+        self.ai.make_decision()
+
+        self.assertEqual(self.ai.state, AIState.ATTACKING)
+
+    def test_weaker_group_can_retreat_just_outside_king_commitment_radius(self):
+        red, _ = self.attack(1, 4)
+        king = self.game.team_king("green")
+        king.x = red[0].x + self.ai.OBJECTIVE_COMMITMENT_RADIUS + .01
+        king.y = red[0].y
+
+        self.ai.make_decision()
+
+        self.assertEqual(self.ai.state, AIState.RECOVERING)
+
     def test_stronger_group_remains_engaged(self):
         self.attack(4, 1)
         self.ai.make_decision()
@@ -158,6 +177,17 @@ class CombatStateTransitionTests(unittest.TestCase):
         self.ai.make_decision()
         self.assertEqual(self.ai.state, AIState.RECOVERING)
 
+    def test_high_casualties_do_not_retreat_near_player_king(self):
+        red, _ = self.attack(6, 4)
+        for unit in red[:3]:
+            unit.health = 0
+        king = self.game.team_king("green")
+        king.x, king.y = red[3].x + 10, red[3].y
+
+        self.ai.make_decision()
+
+        self.assertEqual(self.ai.state, AIState.ATTACKING)
+
     def test_nearby_attackers_finish_low_health_base_despite_casualties(self):
         red, _ = self.attack(4, 1)
         for unit in red:
@@ -170,7 +200,7 @@ class CombatStateTransitionTests(unittest.TestCase):
         self.assertEqual(self.ai.state, AIState.ATTACKING)
         self.assertIsNotNone(red[2].target_pos)
 
-    def test_finish_override_yields_to_overwhelming_live_defenders(self):
+    def test_king_proximity_commitment_overrides_overwhelming_live_defenders(self):
         red, green = self.attack(4, 8)
         for unit in red:
             unit.x = self.game.team_king("green").x + 3
@@ -181,7 +211,7 @@ class CombatStateTransitionTests(unittest.TestCase):
         self.game.team_king("green").health = 20
         self.ai._update_strategic_knowledge()
         self.ai.make_decision()
-        self.assertEqual(self.ai.state, AIState.RECOVERING)
+        self.assertEqual(self.ai.state, AIState.ATTACKING)
 
     def test_later_reassessment_reverses_casualty_override(self):
         red, _ = self.attack(6, 1)

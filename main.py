@@ -117,7 +117,7 @@ UNIT_ASTAR_SEARCHES_PER_UPDATE = 2
 DEFENDER_CHASE_RADIUS = 20.0
 GUARD_LEASH_DISTANCE = DEFENDER_CHASE_RADIUS
 KING_RECOVERY_HEALTH_RATIO = .5
-KING_RECOVERY_THREAT_RADIUS = 5.0
+KING_RECOVERY_ENGAGEMENT_RADIUS = 7.0
 KING_HOME_HEAL_RATE = 1.5
 UNIT_STATS = {
     "swordsman": {
@@ -421,6 +421,7 @@ class Unit:
     moved_this_update: bool = False
     home_position: Optional[tuple[float, float]] = None
     king_recovering: bool = False
+    king_recovery_home_reached: bool = False
     nav_destination: Optional[tuple[float, float]] = None
     nav_waypoints: list[tuple[float, float]] = field(default_factory=list)
     nav_waypoint_index: int = 0
@@ -759,6 +760,7 @@ class EnemyAI:
     COMBAT_URGENT_RETREAT_RATIO = .5
     COMBAT_URGENT_REENGAGE_RATIO = 1.75
     OBJECTIVE_FINISH_SECONDS = 4.0
+    OBJECTIVE_COMMITMENT_RADIUS = 20.0
     # Casualties normally end a wave.  They may be ignored only when a new,
     # non-stale assessment measures an advantage strictly above this margin.
     # This deliberately sits above the ordinary "stronger" threshold.
@@ -1294,6 +1296,17 @@ class EnemyAI:
         if not self._attack_objective_is_reachable():
             return "no_valid_or_reachable_objective"
         return None
+
+    def _king_within_commitment_radius(self):
+        """Keep a wave committed once any member reaches the player king."""
+        objective = self.game.team_king("green")
+        if objective is None or objective.health <= 0:
+            return False
+        return any(
+            dist((unit.x, unit.y), (objective.x, objective.y))
+            <= self.OBJECTIVE_COMMITMENT_RADIUS
+            for unit in self._squad_units()
+        )
 
     def _casualty_retreat_is_overridden(self, assessment):
         """Allow casualty-hit attackers to continue only on fresh strong evidence."""
@@ -1925,6 +1938,9 @@ class EnemyAI:
         return True
 
     def _begin_recovery(self, victorious_player_composition=None):
+        if self._king_within_commitment_radius():
+            self._advance_wave()
+            return
         self._cleanup_squad()
         self._learn_victorious_player_composition(
             victorious_player_composition
@@ -1969,6 +1985,14 @@ class EnemyAI:
             return False
         return dist((unit.x, unit.y), (target.x, target.y)) <= max(
             self.AWARENESS_RADIUS, self.game.effective_attack_range(unit)
+        )
+
+    def retreat_ordered(self, unit):
+        """Return whether this unit must disengage instead of auto-attacking."""
+        return (
+            self.state == AIState.RECOVERING
+            and unit.uid in self.squad
+            and unit.uid not in self.recovery_guards
         )
 
     def _threatens(self, target, protected):
@@ -2045,26 +2069,26 @@ class EnemyAI:
         # awareness must not turn that order back into an individual attack;
         # the strategic controller will either re-engage the whole squad or
         # interrupt recovery to defend the king.
-        if self.state == AIState.RECOVERING and unit.uid in self.squad:
-            if unit.uid in self.recovery_guards:
-                candidates = [
-                    opponent for opponent in self.game.units
-                    if opponent.team != unit.team
-                    and opponent.health > 0
-                    and dist((unit.x, unit.y), (opponent.x, opponent.y))
-                    <= self.game.effective_attack_range(unit)
-                ]
-                unit.target = min(
-                    candidates,
-                    key=lambda opponent: (
-                        dist((unit.x, unit.y), (opponent.x, opponent.y)),
-                        opponent.uid,
-                    ),
-                    default=None,
-                )
-                return unit.target
+        if self.retreat_ordered(unit):
             unit.target = None
             return None
+        if self.state == AIState.RECOVERING and unit.uid in self.recovery_guards:
+            candidates = [
+                opponent for opponent in self.game.units
+                if opponent.team != unit.team
+                and opponent.health > 0
+                and dist((unit.x, unit.y), (opponent.x, opponent.y))
+                <= self.game.effective_attack_range(unit)
+            ]
+            unit.target = min(
+                candidates,
+                key=lambda opponent: (
+                    dist((unit.x, unit.y), (opponent.x, opponent.y)),
+                    opponent.uid,
+                ),
+                default=None,
+            )
+            return unit.target
 
         candidates = [
             opponent for opponent in self.game.nearby_units(
@@ -2360,10 +2384,12 @@ class EnemyAI:
             )
             # Decision precedence:
             # 1. Hard safety always ends the attack.
-            # 2. Only a fresh advantage above CASUALTY_ADVANTAGE_MARGIN can
+            # 2. A wave within OBJECTIVE_COMMITMENT_RADIUS of the player king
+            #    cannot take an elective casualty or strength retreat.
+            # 3. Only a fresh advantage above CASUALTY_ADVANTAGE_MARGIN can
             #    override the casualty trigger.
-            # 3. A weaker assessment retreats.
-            # 4. Uncertain, missing, or stale evidence falls back to retreat
+            # 4. A weaker assessment retreats.
+            # 5. Uncertain, missing, or stale evidence falls back to retreat
             #    when casualties have already made retreat necessary.
             if hard_safety_reason is not None:
                 # A wiped-out wave can resolve a real encounter. Other hard
@@ -2373,6 +2399,8 @@ class EnemyAI:
                     if hard_safety_reason == "no_viable_combat_units"
                     else None
                 )
+            elif self._king_within_commitment_radius():
+                self._advance_wave()
             elif self._can_finish_objective(field_assessment):
                 self._advance_wave()
             elif casualty_retreat:
@@ -3067,24 +3095,6 @@ class Game:
         """Choose the nearest enemy inside the king's home defense radius."""
         return self.autonomous_guard_target(king)
 
-    def nearby_king_recovery_threat(self, king):
-        """Choose the nearest enemy close enough to interrupt king recovery."""
-        candidates = [
-            unit for unit in self.units
-            if unit.team != king.team
-            and unit.health > 0
-            and dist((king.x, king.y), (unit.x, unit.y))
-            <= KING_RECOVERY_THREAT_RADIUS
-        ]
-        return min(
-            candidates,
-            key=lambda unit: (
-                dist((king.x, king.y), (unit.x, unit.y)),
-                unit.uid,
-            ),
-            default=None,
-        )
-
     def autonomous_guard_target(self, guard):
         """Choose the nearest enemy inside a special unit's home defense radius."""
         candidates = [
@@ -3105,7 +3115,16 @@ class Game:
         )
 
     @staticmethod
-    def is_valid_guard_target(guard, target):
+    def special_unit_engagement_radius(guard):
+        if (
+            guard.is_king_objective
+            and guard.king_recovering
+            and guard.king_recovery_home_reached
+        ):
+            return KING_RECOVERY_ENGAGEMENT_RADIUS
+        return GUARD_LEASH_DISTANCE
+
+    def is_valid_guard_target(self, guard, target):
         if (
             target is None
             or target.team == guard.team
@@ -3113,19 +3132,22 @@ class Game:
         ):
             return False
         home = guard.home_position or (guard.x, guard.y)
-        return dist(home, (target.x, target.y)) <= GUARD_LEASH_DISTANCE
+        return (
+            dist(home, (target.x, target.y))
+            <= self.special_unit_engagement_radius(guard)
+        )
 
-    @staticmethod
-    def guard_chase_destination(guard, target):
+    def guard_chase_destination(self, guard, target):
         """Clamp a pursuit point to the guard's leash circle."""
         home = guard.home_position or (guard.x, guard.y)
         dx, dy = target.x - home[0], target.y - home[1]
         distance = math.hypot(dx, dy)
-        if distance <= GUARD_LEASH_DISTANCE:
+        engagement_radius = self.special_unit_engagement_radius(guard)
+        if distance <= engagement_radius:
             return target.x, target.y
         return (
-            home[0] + dx / distance * GUARD_LEASH_DISTANCE,
-            home[1] + dy / distance * GUARD_LEASH_DISTANCE,
+            home[0] + dx / distance * engagement_radius,
+            home[1] + dy / distance * engagement_radius,
         )
 
     def attack(self, attacker, target):
@@ -3155,6 +3177,13 @@ class Game:
         damage *= TERRAIN_METADATA[target_terrain]["damage_taken_multiplier"]
         target.health -= damage
         target.flash = .12
+        if (
+            target.is_king_objective
+            and target.health > 0
+            and target.health <= target.max_health * KING_RECOVERY_HEALTH_RATIO
+            and not target.king_recovering
+        ):
+            self.begin_king_recovery(target)
         attacker.attack_timer = attacker.cooldown
         if attacker.kind == "archer":
             attacker.movement_lock_timer = attacker.cooldown
@@ -3173,6 +3202,15 @@ class Game:
         else:
             mx, my = (attacker.x + target.x) / 2, (attacker.y + target.y) / 2
             self.particles.append([mx, my, .25, attacker.team])
+
+    def begin_king_recovery(self, king):
+        """Immediately cancel combat and send a half-health king home."""
+        king.king_recovering = True
+        king.king_recovery_home_reached = False
+        king.target = None
+        king.target_pos = king.home_position or (king.x, king.y)
+        king.tactical_pos = None
+        self.clear_navigation(king)
 
     def terrain_kind_at(self, position):
         """Return gameplay terrain at a world position, defaulting to plains."""
@@ -3803,8 +3841,11 @@ class Game:
             if u.home_position is None:
                 u.home_position = (u.x, u.y)
             if u.is_king_objective:
-                if u.health <= u.max_health * KING_RECOVERY_HEALTH_RATIO:
-                    u.king_recovering = True
+                if (
+                    u.health <= u.max_health * KING_RECOVERY_HEALTH_RATIO
+                    and not u.king_recovering
+                ):
+                    self.begin_king_recovery(u)
                 at_home = dist((u.x, u.y), u.home_position) < .08
                 if (
                     at_home
@@ -3814,6 +3855,7 @@ class Game:
                     u.health = min(u.max_health, u.health + KING_HOME_HEAL_RATE * dt)
                 if u.health >= u.max_health:
                     u.king_recovering = False
+                    u.king_recovery_home_reached = False
         elif not (u.is_player_commandable or u.is_enemy_ai_commandable):
             u.selected = False
             u.target = None
@@ -3851,24 +3893,26 @@ class Game:
             self.release_combat_target(u)
             target = None
         if u.is_king_objective or u.is_autonomous_guard:
-            recovery_threat = (
-                self.nearby_king_recovery_threat(u)
-                if u.is_king_objective and u.king_recovering
-                else None
-            )
-            if u.is_king_objective and u.king_recovering and recovery_threat is None:
+            if (
+                u.is_king_objective
+                and u.king_recovering
+                and not u.king_recovery_home_reached
+            ):
                 u.target = None
                 u.target_pos = u.home_position
                 if dist((u.x, u.y), u.home_position) < .08:
                     u.x, u.y = u.home_position
                     u.target_pos = None
                     self.clear_navigation(u)
+                    u.king_recovery_home_reached = True
                 else:
                     self.navigate_unit_toward(u, u.home_position, dt)
                     if (u.x, u.y) == u.home_position:
                         u.target_pos = None
-                return
-            target = recovery_threat or self.autonomous_guard_target(u)
+                        u.king_recovery_home_reached = True
+                if not u.king_recovery_home_reached:
+                    return
+            target = self.autonomous_guard_target(u)
             u.target = target
             if target is None:
                 u.target_pos = u.home_position
@@ -3892,6 +3936,19 @@ class Game:
             return
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
+            # Strategic scoring may prefer an opponent that still needs to be
+            # pursued. Do not walk past a player unit that can be struck now.
+            if (
+                not self.enemy_ai.retreat_ordered(u)
+                and (
+                    auto is None
+                    or dist((u.x, u.y), (auto.x, auto.y))
+                    > self.effective_attack_range(u)
+                )
+            ):
+                in_range = self.find_target(u)
+                if in_range is not None:
+                    auto = in_range
             target = auto
         elif u.is_player_commandable:
             # Player units have no target scoring or sticky combat priority:
@@ -3997,6 +4054,7 @@ class Game:
                 )
                 if king.health >= king.max_health:
                     king.king_recovering = False
+                    king.king_recovery_home_reached = False
         dead_units = [unit for unit in self.units if unit.health <= 0]
         dead_green_king = any(
             unit.team == "green" and unit.is_king_objective

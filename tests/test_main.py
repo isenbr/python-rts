@@ -967,6 +967,23 @@ class EnemyAITests(GameTestCase):
         )
         self.assertIs(self.game.enemy_ai.choose_target(sword), enemy_archer)
 
+    def test_enemy_unit_attacks_in_range_player_before_distant_priority_target(self):
+        sword, nearby_sword, distant_archer = self.set_units(
+            ("swordsman", "red", 20, 20),
+            ("swordsman", "green", 20.75, 20),
+            ("archer", "green", 23, 20),
+        )
+        self.assertIs(self.game.enemy_ai.choose_target(sword), distant_archer)
+
+        self.game.update_unit(sword, 0)
+
+        self.assertIs(sword.target, nearby_sword)
+        self.assertEqual(
+            nearby_sword.health,
+            nearby_sword.max_health - sword.damage,
+        )
+        self.assertEqual(distant_archer.health, distant_archer.max_health)
+
     def test_king_has_same_target_priority_as_an_equivalent_unit(self):
         sword, opponent = self.set_units(
             ("swordsman", "red", 20, 20),
@@ -1842,6 +1859,7 @@ class EnemySquadTests(GameTestCase):
         self.ai.state = AIState.ATTACKING
         self.ai._begin_recovery()
 
+        self.assertTrue(self.ai.retreat_ordered(retreating))
         self.game.update_unit(retreating, .25)
 
         self.assertEqual(self.ai.state, AIState.RECOVERING)
@@ -1872,6 +1890,7 @@ class EnemySquadTests(GameTestCase):
             {shields[1].uid, shields[2].uid},
         )
         for shield in shields[1:]:
+            self.assertFalse(self.ai.retreat_ordered(shield))
             self.assertEqual(shield.target_pos, (shield.x, shield.y))
         self.assertEqual(shields[0].target_pos, self.ai.rally_point)
         self.assertEqual(archer.target_pos, self.ai.rally_point)
