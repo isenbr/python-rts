@@ -14,7 +14,7 @@ from main import (
 )
 
 
-NEUTRAL = {"swordsman": 1 / 3, "archer": 1 / 3, "shield": 1 / 3}
+NEUTRAL = {"swordsman": .20, "archer": .50, "shield": .30}
 
 
 class EnemyProductionAdaptationTests(unittest.TestCase):

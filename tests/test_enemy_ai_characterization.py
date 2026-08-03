@@ -51,7 +51,7 @@ class EnemyAICharacterizationTests(unittest.TestCase):
         self.observe_player_army(("swordsman",))
 
         self.assertEqual(
-            neutral, {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS}
+            neutral, {"swordsman": .20, "archer": .50, "shield": .30}
         )
         self.assertEqual(self.ai.production_target_shares(), neutral)
 
@@ -59,10 +59,10 @@ class EnemyAICharacterizationTests(unittest.TestCase):
         self.observe_player_army(("shield", "shield"))
 
         self.assertEqual(self.ai.production_target_shares(), {
-            kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS
+            "swordsman": .20, "archer": .50, "shield": .30,
         })
 
-    def test_neutral_targets_one_third_of_invested_essence_per_kind(self):
+    def test_standard_targets_requested_invested_essence_shares(self):
         for kind in ("swordsman", "archer", "shield"):
             self.game.add_unit(kind, "red", 40, 40)
         invested = self.ai.production_essence_investment()
@@ -76,11 +76,15 @@ class EnemyAICharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(
             balance["target_shares"],
-            {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS},
+            {"swordsman": .20, "archer": .50, "shield": .30},
         )
         self.assertEqual(
             balance["target_essence"],
-            {kind: total_invested / len(UNIT_KINDS) for kind in UNIT_KINDS},
+            {
+                "swordsman": total_invested * .20,
+                "archer": total_invested * .50,
+                "shield": total_invested * .30,
+            },
         )
 
 

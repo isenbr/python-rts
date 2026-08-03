@@ -4,8 +4,10 @@ from __future__ import annotations
 import math
 import random
 import heapq
+import json
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from pathlib import Path
 from typing import Optional
 
 import pygame
@@ -27,7 +29,7 @@ INK = (39, 35, 31)
 FOG_COLOR = (15, 20, 18)
 FOG_VISIBLE_ALPHA = 0
 FOG_EXPLORED_ALPHA = 145
-FOG_UNEXPLORED_ALPHA = 235
+FOG_UNEXPLORED_ALPHA = 255
 FOG_TEXTURE_STRENGTH = 3
 FOG_TEXTURE_SCALE = .16
 TERRAIN_SEED = 4729
@@ -68,13 +70,53 @@ TERRAIN_METADATA = {
     },
 }
 UNIT_KINDS = ("swordsman", "archer", "shield")
+NATIVE_UNIT_KINDS = (
+    "dwarf_guard", "dwarf_arbalist",
+    "elf_bladedancer", "elf_ranger",
+    "orc_cleaver", "orc_spear_thrower",
+    "demon_reaver", "infernal_warlock",
+    "frost_colossus", "ice_hurler",
+)
+NATIVE_FACTIONS = ("dwarf", "elf", "orc", "demon", "frost_giant")
+CHECKPOINT_FACTION_BY_TERRAIN = {
+    "mountain": "dwarf",
+    "forest": "elf",
+    "plains": "orc",
+}
+CHECKPOINT_UNITS = {
+    "dwarf": ("dwarf_guard", "dwarf_arbalist"),
+    "elf": ("elf_bladedancer", "elf_ranger"),
+    "orc": ("orc_cleaver", "orc_spear_thrower"),
+    "demon": ("demon_reaver", "infernal_warlock"),
+    "frost_giant": ("frost_colossus", "ice_hurler"),
+}
+NATIVE_FACTION_COLORS = {
+    "dwarf": (132, 119, 92),
+    "elf": (70, 151, 125),
+    "orc": (132, 112, 48),
+    "demon": (184, 73, 45),
+    "frost_giant": (93, 169, 205),
+}
+NATIVE_FACTION_LABELS = {
+    "dwarf": "DWARF",
+    "elf": "ELF",
+    "orc": "ORC",
+    "demon": "DEMON",
+    "frost_giant": "FROST GIANT",
+}
 PURCHASABLE_UNIT_KINDS = UNIT_KINDS
 OBJECTIVE_UNIT_KINDS = ("king",)
 AUTONOMOUS_GUARD_KINDS = ("knight",)
 ALL_UNIT_KINDS = (
     *PURCHASABLE_UNIT_KINDS,
+    *NATIVE_UNIT_KINDS,
     *OBJECTIVE_UNIT_KINDS,
     *AUTONOMOUS_GUARD_KINDS,
+)
+COMBAT_UNIT_KINDS = (*PURCHASABLE_UNIT_KINDS, *NATIVE_UNIT_KINDS)
+RANGED_UNIT_KINDS = (
+    "archer", "dwarf_arbalist", "elf_ranger", "orc_spear_thrower",
+    "infernal_warlock", "ice_hurler",
 )
 ENEMY_PRODUCTION_KINDS = PURCHASABLE_UNIT_KINDS
 MELEE_UNIT_KINDS = ("swordsman", "shield")
@@ -155,6 +197,76 @@ UNIT_STATS = {
         "cooldown": .5,
         "attack_range": SWORDSMAN_ATTACK_RANGE,
     },
+    "dwarf_guard": {
+        "max_health": 260,
+        "speed": .65,
+        "damage": 6,
+        "cooldown": .8,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
+    },
+    "dwarf_arbalist": {
+        "max_health": 100,
+        "speed": .6,
+        "damage": 30,
+        "cooldown": 2.0,
+        "attack_range": 4.5,
+    },
+    "elf_bladedancer": {
+        "max_health": 50,
+        "speed": 1.2,
+        "damage": 5,
+        "cooldown": .5,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
+    },
+    "elf_ranger": {
+        "max_health": 15,
+        "speed": 1.0,
+        "damage": 35,
+        "cooldown": 1.6,
+        "attack_range": 6.5,
+    },
+    "orc_cleaver": {
+        "max_health": 130,
+        "speed": .95,
+        "damage": 14,
+        "cooldown": .5,
+        "attack_range": SWORDSMAN_ATTACK_RANGE,
+    },
+    "orc_spear_thrower": {
+        "max_health": 50,
+        "speed": .8,
+        "damage": 45,
+        "cooldown": 1.25,
+        "attack_range": 4.0,
+    },
+    "demon_reaver": {
+        "max_health": 500,
+        "speed": 1.0,
+        "damage": 30,
+        "cooldown": .5,
+        "attack_range": 1.1,
+    },
+    "infernal_warlock": {
+        "max_health": 180,
+        "speed": .75,
+        "damage": 90,
+        "cooldown": 1.8,
+        "attack_range": 6.0,
+    },
+    "frost_colossus": {
+        "max_health": 650,
+        "speed": .45,
+        "damage": 50,
+        "cooldown": 1.2,
+        "attack_range": 1.4,
+    },
+    "ice_hurler": {
+        "max_health": 250,
+        "speed": .5,
+        "damage": 85,
+        "cooldown": 2.5,
+        "attack_range": 7.0,
+    },
 }
 ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER = .3
 ARCHER_DAMAGE_VS_KING_MULTIPLIER = .5
@@ -166,7 +278,41 @@ UNIT_RENDER_SCALES = {
     "shield": 1.55 * 1.15,
     "king": 2.2,
     "knight": 2.0,
+    "dwarf_guard": 1.8,
+    "dwarf_arbalist": 1.65,
+    "elf_bladedancer": 1.5,
+    "elf_ranger": 1.5,
+    "orc_cleaver": 1.75,
+    "orc_spear_thrower": 1.6,
+    "demon_reaver": 2.05,
+    "infernal_warlock": 1.8,
+    "frost_colossus": 2.5,
+    "ice_hurler": 2.15,
 }
+CHECKPOINT_CAPTURE_RADIUS = 2.5
+CHECKPOINT_CAPTURE_SECONDS = 5.0
+CHECKPOINT_DEFENDER_LEASH = 12.0
+CHECKPOINT_SPAWN_SECONDS = 30.0
+CHECKPOINT_MAX_DEFENDERS = 15
+CHECKPOINT_RAID_SIZE = 10
+CAPTURED_CHECKPOINT_SPAWN_SECONDS = 45.0
+CAPTURED_CHECKPOINT_MAX_UNITS = 5
+CHECKPOINT_INCOME = 5.0
+CHECKPOINT_VISION_RADIUS = 12.0
+CHECKPOINT_HEAL_RADIUS = 4.0
+CHECKPOINT_HEAL_RATE = 1.0
+CHECKPOINT_OBJECTIVE_BAR_HEIGHT = 66
+DEMON_LIFESTEAL_RATIO = .5
+NATIVE_SPLASH_DAMAGE_RATIO = .5
+NATIVE_SPLASH_TARGET_LIMIT = 3
+WARLOCK_SPLASH_RADIUS = 1.5
+FROST_COLOSSUS_SLOW_MULTIPLIER = .6
+ICE_HURLER_SLOW_MULTIPLIER = .7
+FROST_SLOW_SECONDS = 2.0
+ICE_HURLER_SPLASH_RADIUS = 1.75
+ELF_RANGER_PREFERRED_RANGE = 5.5
+ELF_RANGER_KITE_LEASH = 6.0
+DWARF_ARBALIST_BRACE_SECONDS = 1.0
 MIN_UNIT_RENDER_SIZE = 8
 KING_SLASH_LIFETIME = .20
 RECRUIT_SHORTCUTS = {
@@ -222,6 +368,57 @@ LEVEL_ONE_ENEMY_STARTING_UNITS = (
 
 
 @dataclass(frozen=True)
+class CheckpointProfile:
+    """Per-hold production, territory, and presentation rules."""
+
+    initial_melee: int
+    initial_ranged: int
+    spawn_seconds: float
+    max_defenders: int
+    raid_threshold: int
+    raid_size: int
+    capture_radius: float
+    defender_leash: float
+    vision_radius: float
+    heal_radius: float
+    income: float
+    render_scale: float = 1.0
+    opposite_large_target: bool = False
+
+
+STANDARD_CHECKPOINT_PROFILE = CheckpointProfile(
+    3, 2, CHECKPOINT_SPAWN_SECONDS, CHECKPOINT_MAX_DEFENDERS,
+    CHECKPOINT_MAX_DEFENDERS, CHECKPOINT_RAID_SIZE,
+    CHECKPOINT_CAPTURE_RADIUS, CHECKPOINT_DEFENDER_LEASH,
+    CHECKPOINT_VISION_RADIUS, CHECKPOINT_HEAL_RADIUS, CHECKPOINT_INCOME,
+)
+EDITOR_CHECKPOINT_PROFILE = CheckpointProfile(
+    3, 2, CHECKPOINT_SPAWN_SECONDS, CHECKPOINT_MAX_DEFENDERS,
+    CHECKPOINT_MAX_DEFENDERS, CHECKPOINT_RAID_SIZE,
+    CHECKPOINT_CAPTURE_RADIUS, CHECKPOINT_DEFENDER_LEASH,
+    CHECKPOINT_VISION_RADIUS, CHECKPOINT_HEAL_RADIUS, 10.0,
+)
+LEVEL_FIVE_STANDARD_CHECKPOINT_PROFILE = CheckpointProfile(
+    3, 2, CHECKPOINT_SPAWN_SECONDS, CHECKPOINT_MAX_DEFENDERS,
+    CHECKPOINT_MAX_DEFENDERS, CHECKPOINT_RAID_SIZE,
+    CHECKPOINT_CAPTURE_RADIUS, CHECKPOINT_DEFENDER_LEASH,
+    CHECKPOINT_VISION_RADIUS, CHECKPOINT_HEAL_RADIUS, 10.0,
+)
+LARGE_CHECKPOINT_PROFILE = CheckpointProfile(
+    6, 4, 10.0, 100, 70, 50, 5.0, 24.0, 24.0, 8.0, 20.0, 2.0, True,
+)
+
+CUSTOM_LEVEL_FILE = Path(__file__).with_name("custom_level.json")
+EDITOR_MAP_SIZES = (60, 120, 160, 200, 240)
+EDITOR_TERRAIN_CODES = {
+    "plains": "p", "forest": "f", "mountain": "m", "path": "r",
+}
+EDITOR_CODE_TERRAIN = {
+    code: kind for kind, code in EDITOR_TERRAIN_CODES.items()
+}
+
+
+@dataclass(frozen=True)
 class LevelConfig:
     number: int
     name: str
@@ -233,6 +430,203 @@ class LevelConfig:
     enemy_ai: str
     starting_essence: float
     enemy_starting_essence: float
+    player_income: float
+    enemy_income: float
+    has_checkpoints: bool = False
+    display_title: str = ""
+    story_text: str = ""
+    difficulty_label: str = ""
+    mechanic_tags: tuple[str, ...] = ()
+    preview_type: str = "siege"
+
+
+@dataclass
+class EditorHold:
+    """A checkpoint placed on the custom-level overview."""
+
+    x: int
+    y: int
+
+
+@dataclass
+class EditorLevelDraft:
+    """Mutable, serializable source of truth for the level editor."""
+
+    map_size: int
+    terrain: dict[tuple[int, int], TerrainCell]
+    holds: list[EditorHold]
+    green_start: tuple[float, float]
+    red_start: tuple[float, float]
+    available_units: set[str]
+    green_starting_counts: dict[str, int]
+    red_starting_counts: dict[str, int]
+    green_income: float
+    red_income: float
+    fog_of_war: bool
+
+    def resize(self, new_size):
+        """Resize without throwing away the terrain the player already made."""
+        if new_size == self.map_size:
+            return
+        old_size, old_terrain = self.map_size, self.terrain
+        scale = new_size / old_size
+        self.terrain = {
+            (x, y): old_terrain[
+                (min(old_size - 1, int(x / scale)),
+                 min(old_size - 1, int(y / scale)))
+            ]
+            for x in range(new_size) for y in range(new_size)
+        }
+        self.holds = [
+            EditorHold(
+                int(clamp(round(hold.x * scale), 1, new_size - 2)),
+                int(clamp(round(hold.y * scale), 1, new_size - 2)),
+            )
+            for hold in self.holds
+        ]
+        self.green_start = tuple(
+            clamp(value * scale, 2.5, new_size - 2.5)
+            for value in self.green_start
+        )
+        self.red_start = tuple(
+            clamp(value * scale, 2.5, new_size - 2.5)
+            for value in self.red_start
+        )
+        self.map_size = new_size
+
+    def starting_units(self, team):
+        counts = (
+            self.green_starting_counts
+            if team == "green" else self.red_starting_counts
+        )
+        direction = 1 if team == "green" else -1
+        placed = []
+        index = 0
+        for kind in UNIT_KINDS:
+            for _ in range(counts.get(kind, 0)):
+                column, row = divmod(index, 7)
+                placed.append((
+                    kind,
+                    direction * (5.0 + column * 1.5),
+                    (row - 3) * 1.25,
+                ))
+                index += 1
+        return tuple(placed)
+
+    def to_level_config(self):
+        return LevelConfig(
+            0, "CUSTOM BATTLEFIELD", self.map_size,
+            "A battlefield shaped in the level editor.",
+            tuple(kind for kind in UNIT_KINDS if kind in self.available_units),
+            self.starting_units("green"), self.starting_units("red"),
+            "full", 600.0, 600.0, self.green_income, self.red_income,
+            bool(self.holds), "Custom Battlefield",
+            "Your terrain, armies, economy, and objectives.",
+            "CUSTOM", ("Player made",), "three_checkpoints",
+        )
+
+    def to_dict(self):
+        rows = []
+        for y in range(self.map_size):
+            rows.append("".join(
+                EDITOR_TERRAIN_CODES[self.terrain[(x, y)].kind]
+                for x in range(self.map_size)
+            ))
+        return {
+            "version": 1,
+            "map_size": self.map_size,
+            "terrain": rows,
+            "holds": [[hold.x, hold.y] for hold in self.holds],
+            "green_start": list(self.green_start),
+            "red_start": list(self.red_start),
+            "available_units": sorted(self.available_units),
+            "green_starting_counts": self.green_starting_counts,
+            "red_starting_counts": self.red_starting_counts,
+            "green_income": self.green_income,
+            "red_income": self.red_income,
+            "fog_of_war": self.fog_of_war,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        size = int(data["map_size"])
+        if size not in EDITOR_MAP_SIZES:
+            raise ValueError("Unsupported custom map size")
+        rows = data["terrain"]
+        if len(rows) != size or any(len(row) != size for row in rows):
+            raise ValueError("Custom terrain dimensions do not match map size")
+        terrain = {}
+        for y, row in enumerate(rows):
+            for x, code in enumerate(row):
+                kind = EDITOR_CODE_TERRAIN.get(code)
+                if kind is None:
+                    raise ValueError("Unknown custom terrain code")
+                terrain[(x, y)] = TerrainCell(kind, (x * 3 + y * 5) % 4)
+        available = set(data.get("available_units", UNIT_KINDS))
+        if not available or not available.issubset(UNIT_KINDS):
+            raise ValueError("Custom level must have valid available units")
+        starts = []
+        for key in ("green_start", "red_start"):
+            values = tuple(float(value) for value in data[key])
+            if len(values) != 2 or not all(2.5 <= value <= size - 2.5 for value in values):
+                raise ValueError("Custom starting position is outside the map")
+            starts.append(values)
+        def counts(key):
+            source = data.get(key, {})
+            return {
+                kind: int(clamp(int(source.get(kind, 0)), 0, 30))
+                for kind in UNIT_KINDS
+            }
+        holds = [
+            EditorHold(
+                int(clamp(int(position[0]), 1, size - 2)),
+                int(clamp(int(position[1]), 1, size - 2)),
+            )
+            for position in data.get("holds", [])[:12]
+        ]
+        return cls(
+            size, terrain, holds, starts[0], starts[1], available,
+            counts("green_starting_counts"),
+            counts("red_starting_counts"),
+            float(clamp(float(data.get("green_income", 20)), 0, 100)),
+            float(clamp(float(data.get("red_income", 20)), 0, 100)),
+            bool(data.get("fog_of_war", True)),
+        )
+
+
+@dataclass
+class Checkpoint:
+    """A terrain-themed strategic income landmark."""
+
+    uid: int
+    x: float
+    y: float
+    terrain_kind: str
+    native_faction: str
+    owner: str
+    profile: CheckpointProfile = STANDARD_CHECKPOINT_PROFILE
+    defender_uids: set[int] = field(default_factory=set)
+    spawn_timer: float = CHECKPOINT_SPAWN_SECONDS
+    spawn_count: int = 0
+    captured_spawn_timer: float = CAPTURED_CHECKPOINT_SPAWN_SECONDS
+    captured_spawn_count: int = 0
+    captured_unit_uids: dict[str, set[int]] = field(
+        default_factory=lambda: {"green": set(), "red": set()}
+    )
+    capturing_team: Optional[str] = None
+    capture_progress: float = 0.0
+    discovered: bool = False
+    under_attack: bool = False
+    contested: bool = False
+    ever_captured: bool = False
+
+    @property
+    def cell(self):
+        return int(self.x), int(self.y)
+
+    @property
+    def income_active(self):
+        return self.owner in ("green", "red") and not self.under_attack
 
 
 @dataclass(frozen=True)
@@ -264,31 +658,60 @@ LEVELS = {
         1, "THE FIRST MARCH", 20,
         "Face ten swordsmen and two archers. Recruit swordsmen only.",
         ("swordsman",), (), LEVEL_ONE_ENEMY_STARTING_UNITS,
-        "none", 2000.0, 0.0,
+        "none", 2000.0, 0.0, 20.0, 20.0, False,
+        "Survive the Ambush!",
+        "Crimson raiders strike at dawn. Hold the line and survive.",
+        "EASY", ("Fixed battlefield", "Swordsmen only"), "ambush",
     ),
     2: LevelConfig(
         2, "THE LONG ROAD", 60,
         "Swordsmen and archers. The enemy sends one swordsman at 200 gold.",
         ("swordsman", "archer"), (), (), "simple", 400.0, 0.0,
+        20.0, 20.0, False,
+        "Punish Your Enemies!",
+        "March the long road and break every force sent against you.",
+        "MEDIUM", ("Road warfare", "Enemy waves"), "road_waves",
     ),
     3: LevelConfig(
         3, "THE VERDANT WAR", 120,
         "The complete battle with every troop and the adaptive enemy army.",
         UNIT_KINDS, PLAYER_STARTING_UNITS, ENEMY_STARTING_UNITS,
-        "full", 400.0, 500.0,
+        "full", 400.0, 500.0, 20.0, 20.0, False,
+        "Kill the Crimson King!",
+        "Command every troop, storm the stronghold, and end the tyrant's reign.",
+        "CONQUERER", ("Full roster", "Adaptive enemy"), "full_siege",
+    ),
+    4: LevelConfig(
+        4, "THE THREE HOLDS", 160,
+        "Seize three ancient holds to fund the final conquest.",
+        UNIT_KINDS, PLAYER_STARTING_UNITS,
+        ENEMY_STARTING_UNITS + (("archer", -6.5, 2.0),),
+        "full", 400.0, 500.0, 10.0, 15.0, True,
+        "Claim the Three Holds!",
+        "Seize dwarven, elven, and orc holds before the final conquest.",
+        "WARLORD", ("Three checkpoints", "Native factions", "Healing holds"),
+        "three_checkpoints",
+    ),
+    5: LevelConfig(
+        5, "LAST STAND", 160,
+        "Break the five holds and survive fire and frost.",
+        UNIT_KINDS, PLAYER_STARTING_UNITS,
+        ENEMY_STARTING_UNITS + (("archer", -6.5, 2.0),),
+        "full", 400.0, 500.0, 10.0, 30.0, True,
+        "Last Stand", "", "APOCALYPSE", (), "last_stand",
     ),
 }
 
 
-def configure_map(size):
+def configure_map(size, green_start=None, red_start=None):
     """Update the shared world geometry before constructing a level."""
     global MAP_SIZE, MAP_CENTER, WORLD_MAX
     global GREEN_KING_POSITION, RED_KING_POSITION, CAMERA_START
     MAP_SIZE = size
     MAP_CENTER = MAP_SIZE / 2
     WORLD_MAX = MAP_SIZE - .5
-    GREEN_KING_POSITION = (round(MAP_SIZE * .09), MAP_CENTER)
-    RED_KING_POSITION = (round(MAP_SIZE * .885), MAP_CENTER)
+    GREEN_KING_POSITION = green_start or (round(MAP_SIZE * .09), MAP_CENTER)
+    RED_KING_POSITION = red_start or (round(MAP_SIZE * .885), MAP_CENTER)
     CAMERA_START = (GREEN_KING_POSITION[0] + 2.5, MAP_CENTER + .5)
 
 
@@ -309,6 +732,231 @@ def clamp_to_map(position):
 
 def offset_from(position, offset):
     return position[0] + offset[0], position[1] + offset[1]
+
+
+def make_default_editor_draft(size=200):
+    """Create a roomy, immediately playable canvas for a custom scenario."""
+    cache = getattr(make_default_editor_draft, "_terrain_cache", {})
+    if size in cache:
+        terrain = dict(cache[size])
+    else:
+        rng = random.Random("verdant-crown:level-editor")
+        region_kinds = ("plains", "forest", "mountain") * 16
+        regions = [
+            (
+                rng.uniform(0, size), rng.uniform(0, size), kind,
+                rng.uniform(.75, 1.3),
+            )
+            for kind in region_kinds
+        ]
+        terrain = {}
+        for x in range(size):
+            for y in range(size):
+                kind = min(
+                    regions,
+                    key=lambda region: (
+                        (x + .5 - region[0]) ** 2
+                        + (y + .5 - region[1]) ** 2
+                    ) / region[3] ** 2,
+                )[2]
+                terrain[(x, y)] = TerrainCell(kind, rng.randrange(4))
+        for x in range(round(size * .09), round(size * .89) + 1):
+            progress = x / size
+            y = round(size * (.50 + .10 * math.sin(progress * math.tau * 1.4)))
+            for path_y in range(max(0, y - 1), min(size, y + 2)):
+                cell = terrain[(x, path_y)]
+                terrain[(x, path_y)] = TerrainCell("path", cell.variation)
+        cache[size] = dict(terrain)
+        make_default_editor_draft._terrain_cache = cache
+    green_start = (round(size * .09), size / 2)
+    red_start = (round(size * .885), size / 2)
+    for start in (green_start, red_start):
+        for x in range(max(0, int(start[0]) - 5), min(size, int(start[0]) + 6)):
+            for y in range(max(0, int(start[1]) - 5), min(size, int(start[1]) + 6)):
+                if dist((x + .5, y + .5), start) <= 5:
+                    terrain[(x, y)] = TerrainCell(
+                        "plains", terrain[(x, y)].variation
+                    )
+    holds = [
+        EditorHold(round(size * .34), round(size * .31)),
+        EditorHold(round(size * .51), round(size * .68)),
+        EditorHold(round(size * .68), round(size * .29)),
+    ]
+    return EditorLevelDraft(
+        size, terrain, holds, green_start, red_start, set(UNIT_KINDS),
+        {"swordsman": 2, "archer": 1, "shield": 1},
+        {"swordsman": 3, "archer": 1, "shield": 1},
+        20.0, 20.0, True,
+    )
+
+
+def make_random_editor_draft(
+    draft,
+    rng=None,
+    hold_count=3,
+    hold_connection_ratio=1.0,
+    path_amount=.25,
+    terrain_weights=None,
+):
+    """Randomize map geography while preserving scenario and army settings."""
+    rng = rng or random.SystemRandom()
+    size = draft.map_size
+    hold_count = int(clamp(int(hold_count), 0, 12))
+    hold_connection_ratio = clamp(float(hold_connection_ratio), 0.0, 1.0)
+    path_amount = clamp(float(path_amount), 0.0, 1.0)
+    terrain_weights = terrain_weights or {
+        "plains": 1.0, "forest": 1.0, "mountain": 1.0,
+    }
+    biome_names = ("plains", "forest", "mountain")
+    weights = [max(0.0, float(terrain_weights.get(kind, 0))) for kind in biome_names]
+    if not any(weights):
+        weights = [1.0, 1.0, 1.0]
+    region_count = max(18, round(size / 4))
+    biome_kinds = rng.choices(biome_names, weights=weights, k=region_count)
+    enabled_biomes = [
+        kind for kind, weight in zip(biome_names, weights) if weight > 0
+    ]
+    for index, kind in enumerate(enabled_biomes):
+        biome_kinds[index] = kind
+    rng.shuffle(biome_kinds)
+    regions = [
+        (
+            rng.uniform(0, size),
+            rng.uniform(0, size),
+            kind,
+            rng.uniform(.72, 1.35),
+        )
+        for kind in biome_kinds
+    ]
+    terrain = {}
+    for x in range(size):
+        for y in range(size):
+            kind = min(
+                regions,
+                key=lambda region: (
+                    (x + .5 - region[0]) ** 2
+                    + (y + .5 - region[1]) ** 2
+                ) / region[3] ** 2,
+            )[2]
+            terrain[(x, y)] = TerrainCell(kind, rng.randrange(4))
+
+    green_start = (
+        round(size * .09),
+        round(rng.uniform(size * .32, size * .68), 1),
+    )
+    red_start = (
+        round(size * .89),
+        round(rng.uniform(size * .32, size * .68), 1),
+    )
+
+    holds = []
+    hold_biomes = enabled_biomes[:hold_count]
+    hold_biomes.extend(rng.choices(
+        biome_names, weights=weights, k=hold_count - len(hold_biomes)
+    ))
+    rng.shuffle(hold_biomes)
+    minimum_hold_spacing = size * max(.055, .16 - hold_count * .008)
+    for terrain_kind in hold_biomes:
+        candidates = [
+            (x, y)
+            for (x, y), cell in terrain.items()
+            if cell.kind == terrain_kind
+            and size * .20 <= x <= size * .80
+            and size * .10 <= y <= size * .90
+            and dist((x + .5, y + .5), green_start) >= size * .18
+            and dist((x + .5, y + .5), red_start) >= size * .18
+            and all(
+                dist((x, y), (hold.x, hold.y)) >= minimum_hold_spacing
+                for hold in holds
+            )
+        ]
+        if not candidates:
+            candidates = [
+                (x, y)
+                for (x, y), cell in terrain.items()
+                if cell.kind == terrain_kind
+                and 2 <= x < size - 2 and 2 <= y < size - 2
+                and all((x, y) != (hold.x, hold.y) for hold in holds)
+            ]
+        if not candidates:
+            fallback_cells = [
+                (x, y)
+                for x in range(round(size * .25), round(size * .75))
+                for y in range(round(size * .20), round(size * .80))
+                if all((x, y) != (hold.x, hold.y) for hold in holds)
+            ]
+            x, y = rng.choice(fallback_cells)
+            terrain[(x, y)] = TerrainCell(terrain_kind, rng.randrange(4))
+            candidates = [(x, y)]
+        x, y = rng.choice(candidates)
+        holds.append(EditorHold(x, y))
+
+    path_cells = set()
+    route_count = 0 if path_amount <= 0 else max(1, round(path_amount * 4))
+    for route_index in range(route_count):
+        if route_index == 0:
+            start, end = green_start, red_start
+        else:
+            start = (0, rng.uniform(size * .08, size * .92))
+            end = (size - 1, rng.uniform(size * .08, size * .92))
+        anchors = [
+            start,
+            (size * .30, rng.uniform(size * .12, size * .88)),
+            (size * .52, rng.uniform(size * .12, size * .88)),
+            (size * .72, rng.uniform(size * .12, size * .88)),
+            end,
+        ]
+        for (x0, y0), (x1, y1) in zip(anchors, anchors[1:]):
+            steps = max(1, round(max(abs(x1 - x0), abs(y1 - y0))))
+            for step in range(steps + 1):
+                progress = step / steps
+                eased = progress * progress * (3.0 - 2.0 * progress)
+                x = round(x0 + (x1 - x0) * progress)
+                y = round(y0 + (y1 - y0) * eased)
+                for path_y in range(max(0, y - 1), min(size, y + 2)):
+                    path_cells.add((int(clamp(x, 0, size - 1)), path_y))
+
+    for hold in holds:
+        if not path_cells or rng.random() > hold_connection_ratio:
+            continue
+        nearest = min(
+            path_cells,
+            key=lambda cell: abs(cell[0] - hold.x) + abs(cell[1] - hold.y),
+        )
+        dx, dy = nearest[0] - hold.x, nearest[1] - hold.y
+        steps = max(1, abs(dx), abs(dy))
+        for step in range(1, steps + 1):
+            progress = step / steps
+            path_cells.add((
+                round(hold.x + dx * progress),
+                round(hold.y + dy * progress),
+            ))
+    hold_cells = {(hold.x, hold.y) for hold in holds}
+    for cell in path_cells - hold_cells:
+        old = terrain[cell]
+        terrain[cell] = TerrainCell("path", old.variation)
+
+    for start in (green_start, red_start):
+        for x in range(max(0, int(start[0]) - 5), min(size, int(start[0]) + 6)):
+            for y in range(max(0, int(start[1]) - 5), min(size, int(start[1]) + 6)):
+                if dist((x + .5, y + .5), start) <= 5:
+                    terrain[(x, y)] = TerrainCell(
+                        "plains", terrain[(x, y)].variation
+                    )
+
+    return EditorLevelDraft(
+        size,
+        terrain,
+        holds,
+        green_start,
+        red_start,
+        set(draft.available_units),
+        dict(draft.green_starting_counts),
+        dict(draft.red_starting_counts),
+        draft.green_income,
+        draft.red_income,
+        draft.fog_of_war,
+    )
 
 
 class UnitSpatialHash:
@@ -434,6 +1082,13 @@ class Unit:
     nav_terrain_revision: int = -1
     nav_terrain_route: bool = False
     nav_direct_check_timer: float = 0.0
+    checkpoint_uid: Optional[int] = None
+    raid_target_checkpoint_uid: Optional[int] = None
+    raid_target_king_team: Optional[str] = None
+    stationary_time: float = 0.0
+    braced: bool = False
+    slow_timer: float = 0.0
+    slow_multiplier: float = 1.0
 
     def __post_init__(self):
         try:
@@ -461,11 +1116,19 @@ class Unit:
 
     @property
     def is_player_commandable(self):
-        return self.team == "green" and self.is_purchasable_army_unit
+        return self.team == "green" and self.kind in COMBAT_UNIT_KINDS
 
     @property
     def is_enemy_ai_commandable(self):
-        return self.team == "red" and self.is_purchasable_army_unit
+        return self.team == "red" and self.kind in COMBAT_UNIT_KINDS
+
+    @property
+    def is_native_defender(self):
+        return self.kind in NATIVE_UNIT_KINDS and self.team in NATIVE_FACTIONS
+
+    @property
+    def is_ranged(self):
+        return self.kind in RANGED_UNIT_KINDS
 
 
 class AIState(Enum):
@@ -571,8 +1234,9 @@ class CombatStrengthEvaluator:
         dps = stats["damage"] / stats["cooldown"]
         matchup = 1.0
         if opposing_kinds:
+            kind_matchups = cls.MATCHUP_MULTIPLIER.get(kind, {})
             matchup = sum(
-                cls.MATCHUP_MULTIPLIER[kind][opponent]
+                kind_matchups.get(opponent, 1.0)
                 for opponent in opposing_kinds
             ) / len(opposing_kinds)
         return health * dps * cls._range_multiplier(kind) * matchup
@@ -605,7 +1269,7 @@ class CombatStrengthEvaluator:
         )
         unsupported = sorted({
             unit.kind for unit in evaluated_units
-            if unit.kind not in PURCHASABLE_UNIT_KINDS
+            if unit.kind not in COMBAT_UNIT_KINDS
         })
         if unsupported:
             raise ValueError(
@@ -702,6 +1366,7 @@ class EnemyAI:
     """Owns red-team strategy without changing per-unit combat or movement."""
 
     AWARENESS_RADIUS = 10.0
+    PASSIVE_ENGAGEMENT_RADIUS = 5.0
     ARCHER_PROTECTION_RADIUS = 4.0
     KING_DEFENSE_RADIUS = 14.0
     SWITCH_MARGIN = 18.0
@@ -720,6 +1385,16 @@ class EnemyAI:
         "shield": "shield_rank",
         "swordsman": "swordsman_rank",
         "archer": "archer_rank",
+        "dwarf_guard": "shield_rank",
+        "dwarf_arbalist": "archer_rank",
+        "elf_bladedancer": "swordsman_rank",
+        "elf_ranger": "archer_rank",
+        "orc_cleaver": "swordsman_rank",
+        "orc_spear_thrower": "archer_rank",
+        "demon_reaver": "shield_rank",
+        "infernal_warlock": "archer_rank",
+        "frost_colossus": "shield_rank",
+        "ice_hurler": "archer_rank",
     }
     FORMATION_FORWARD_OFFSETS = {
         "shield_rank": 0.0,
@@ -736,6 +1411,8 @@ class EnemyAI:
     RECALL_THREAT_THRESHOLD = 5.0
     DEFENSE_CLEAR_COOLDOWN = 4.0
     DEFENSIVE_RESERVE_SIZE = 2
+    CUSTOM_KING_GARRISON_SIZE = 10
+    CUSTOM_CHECKPOINT_GARRISON_SIZE = 15
     DEFENDER_ASSIGN_RADIUS = 22.0
     ARCHER_DEFENSE_OFFSET = 3.0
     EMERGENCY_MELEE_THREAT = 4.0
@@ -765,6 +1442,25 @@ class EnemyAI:
     # non-stale assessment measures an advantage strictly above this margin.
     # This deliberately sits above the ordinary "stronger" threshold.
     CASUALTY_ADVANTAGE_MARGIN = 1.5
+    CHECKPOINT_ATTACK_RATIO = 1.35
+    CHECKPOINT_MAX_RALLY_WAIT = 8.0
+    CHECKPOINT_MIN_ATTACK_UNITS = 15
+    LEVEL_FIVE_MIN_ATTACK_UNITS = 20
+    CHECKPOINT_COHESION_FRACTION = .75
+    RANGED_GROUP_RADIUS = 4.0
+    RANGED_GROUP_BONUS_PER_ALLY = .10
+    CHECKPOINT_PRODUCTION_SHARES = {
+        "dwarf": {"archer": .50, "swordsman": .30, "shield": .20},
+        "elf": {"shield": .55, "swordsman": .30, "archer": .15},
+        "orc": {"archer": .70, "shield": .20, "swordsman": .10},
+        "demon": {"archer": .60, "shield": .30, "swordsman": .10},
+        "frost_giant": {"archer": .55, "shield": .40, "swordsman": .05},
+    }
+    STANDARD_PRODUCTION_SHARES = {
+        "swordsman": .20,
+        "archer": .50,
+        "shield": .30,
+    }
 
     # Production score weights. Keeping these named makes balance changes explicit.
     ARCHER_THREAT_LOW_THRESHOLD = 0
@@ -887,6 +1583,17 @@ class EnemyAI:
         self.failed_waves = 0
         self.last_production_choice: Optional[str] = None
         self.unavailable_production_kinds: set[str] = set()
+        self.checkpoint_target_uid: Optional[int] = None
+        self.checkpoint_guards: dict[int, set[int]] = {}
+        self.checkpoint_route_cache: dict[tuple, tuple[tuple[float, float], ...]] = {}
+        self.checkpoint_route: tuple[tuple[float, float], ...] = ()
+        self.checkpoint_route_index = 0
+        self.formation_checkpoint_uid: Optional[int] = None
+        self.formation_anchor: Optional[tuple[float, float]] = None
+        self.projected_arrival_eta: Optional[float] = None
+        self.projected_defender_count = 0
+        self.projected_defender_strength = 0.0
+        self.projected_defender_composition: dict[str, int] = {}
         self.production_history: list[dict] = []
         self.last_production_scores = {
             kind: 0.0 for kind in ENEMY_PRODUCTION_KINDS
@@ -912,6 +1619,226 @@ class EnemyAI:
             self.game.team_king("red").y + direction_y * self.RALLY_DISTANCE,
         )
 
+    def _terrain_route_to_checkpoint(self, checkpoint):
+        """Return a cached fastest-terrain route from the rally point."""
+        start = self.game._nav_cell(self.rally_point)
+        goal = checkpoint.cell
+        key = (self.game.terrain_revision, start, checkpoint.uid, goal)
+        cached = self.checkpoint_route_cache.get(key)
+        if cached is not None:
+            return cached
+        directions = (
+            (-1, 0), (0, -1), (0, 1), (1, 0),
+            (-1, -1), (-1, 1), (1, -1), (1, 1),
+        )
+        frontier = [(0.0, 0.0, start)]
+        costs = {start: 0.0}
+        came_from = {}
+        while frontier:
+            _, current_cost, current = heapq.heappop(frontier)
+            if current_cost != costs.get(current):
+                continue
+            if current == goal:
+                break
+            for dx, dy in directions:
+                neighbor = current[0] + dx, current[1] + dy
+                if not (0 <= neighbor[0] < MAP_SIZE and 0 <= neighbor[1] < MAP_SIZE):
+                    continue
+                new_cost = current_cost + self.game._terrain_step_cost(
+                    current, neighbor
+                )
+                if new_cost + 1e-12 >= costs.get(neighbor, math.inf):
+                    continue
+                costs[neighbor] = new_cost
+                came_from[neighbor] = current
+                heuristic = dist(neighbor, goal) / 2.0
+                heapq.heappush(frontier, (new_cost + heuristic, new_cost, neighbor))
+        if goal not in costs:
+            route = (self.rally_point, (checkpoint.x, checkpoint.y))
+        else:
+            cells = [goal]
+            current = goal
+            while current != start:
+                current = came_from[current]
+                cells.append(current)
+            cells.reverse()
+            route = (
+                self.rally_point,
+                *(self.game._nav_world(cell) for cell in cells[1:]),
+            )
+            if route[-1] != (checkpoint.x, checkpoint.y):
+                route = (*route, (checkpoint.x, checkpoint.y))
+        self.checkpoint_route_cache[key] = tuple(route)
+        return self.checkpoint_route_cache[key]
+
+    def _checkpoint_route_eta(self, checkpoint, members):
+        route = self._terrain_route_to_checkpoint(checkpoint)
+        slowest_speed = min((unit.speed for unit in members), default=0.0)
+        if slowest_speed <= 0:
+            return route, math.inf
+        travel_time = 0.0
+        for start, end in zip(route, route[1:]):
+            terrain_kind = self.game.terrain_kind_at(end)
+            travel_time += dist(start, end) / (
+                slowest_speed * terrain_movement_multiplier(terrain_kind)
+            )
+        return route, travel_time
+
+    @staticmethod
+    def _future_native_kind(checkpoint, spawn_index):
+        melee, ranged = CHECKPOINT_UNITS[checkpoint.native_faction]
+        initial_count = (
+            checkpoint.profile.initial_melee
+            + checkpoint.profile.initial_ranged
+        )
+        return ranged if (spawn_index - initial_count) % 2 == 0 else melee
+
+    def projected_checkpoint_defenders(self, checkpoint, members):
+        """Project the defenders present when the slowest attacker arrives."""
+        route, eta = self._checkpoint_route_eta(checkpoint, members)
+        defenders = list(self._checkpoint_defenders(checkpoint))
+        if checkpoint.owner == checkpoint.native_faction and math.isfinite(eta):
+            next_spawn = max(0.0, checkpoint.spawn_timer)
+            scheduled = 0
+            if next_spawn < eta - 1e-9:
+                scheduled = 1 + int(
+                    max(0.0, eta - next_spawn - 1e-9)
+                    // checkpoint.profile.spawn_seconds
+                )
+            if not checkpoint.profile.opposite_large_target:
+                scheduled = min(
+                    max(0, checkpoint.profile.max_defenders - len(defenders)),
+                    scheduled,
+                )
+            for offset in range(scheduled):
+                if len(defenders) >= checkpoint.profile.max_defenders:
+                    break
+                kind = self._future_native_kind(
+                    checkpoint, checkpoint.spawn_count + offset
+                )
+                projected = Unit(kind, checkpoint.native_faction, checkpoint.x, checkpoint.y)
+                projected.uid = -(checkpoint.uid * 100 + offset + 1)
+                defenders.append(projected)
+                if (
+                    checkpoint.profile.opposite_large_target
+                    and
+                    len(defenders) >= checkpoint.profile.raid_threshold
+                    and self.game.native_raid_objective(checkpoint) is not None
+                ):
+                    defenders = defenders[checkpoint.profile.raid_size:]
+        composition = {
+            kind: sum(unit.kind == kind for unit in defenders)
+            for kind in NATIVE_UNIT_KINDS + UNIT_KINDS
+            if any(unit.kind == kind for unit in defenders)
+        }
+        return tuple(defenders), tuple(route), eta, composition
+
+    def _checkpoint_defenders(self, checkpoint):
+        if checkpoint.owner in NATIVE_FACTIONS:
+            return [
+                unit for unit in self.game.units
+                if unit.uid in checkpoint.defender_uids and unit.health > 0
+            ]
+        if checkpoint.owner == "green":
+            # Strategic checkpoint estimates may use only positions red has
+            # legitimately observed. Hidden live unit positions never enter
+            # objective selection or launch authorization.
+            return [
+                sighting for sighting in self.last_seen_player_army.values()
+                if sighting.health > 0
+                and dist((sighting.x, sighting.y), (checkpoint.x, checkpoint.y))
+                <= checkpoint.profile.vision_radius
+            ]
+        return []
+
+    @classmethod
+    def _raw_group_strength(cls, group, opponents):
+        """Return checkpoint strength, including nearby ranged-unit support."""
+        living_group = tuple(unit for unit in group if unit.health > 0)
+        opponent_kinds = [unit.kind for unit in opponents]
+        return sum(
+            CombatStrengthEvaluator._unit_strength(
+                unit.kind, unit.health, opponent_kinds
+            ) * (
+                1.0 + cls.RANGED_GROUP_BONUS_PER_ALLY * sum(
+                    other is not unit
+                    and other.kind in RANGED_UNIT_KINDS
+                    and dist((unit.x, unit.y), (other.x, other.y))
+                    <= cls.RANGED_GROUP_RADIUS
+                    for other in living_group
+                )
+                if unit.kind in RANGED_UNIT_KINDS else 1.0
+            ) * {
+                "dwarf_guard": 1.15,
+                "dwarf_arbalist": 1.20,
+                "elf_bladedancer": 1.10,
+                "elf_ranger": 2.0,
+                "orc_cleaver": 1.30,
+                "orc_spear_thrower": (
+                    1.35
+                    if unit.health < UNIT_STATS[unit.kind]["max_health"] * .5
+                    else 1.0
+                ),
+                "demon_reaver": 1.5,
+                "infernal_warlock": 1.8,
+                "frost_colossus": 1.35,
+                "ice_hurler": 1.6,
+            }.get(unit.kind, 1.0)
+            for unit in living_group
+        )
+
+    def checkpoint_attack_ratio(self, members, checkpoint):
+        defenders, _, _, _ = self.projected_checkpoint_defenders(
+            checkpoint, members
+        )
+        if not defenders:
+            return math.inf
+        own = self._raw_group_strength(members, defenders)
+        opposing = self._raw_group_strength(defenders, members)
+        return own / max(opposing, CombatStrengthEvaluator.MIN_STRENGTH)
+
+    def _select_checkpoint_objective(self, members=()):
+        candidates = [
+            checkpoint for checkpoint in self.game.checkpoints
+            if checkpoint.owner != "red"
+        ]
+        if not candidates:
+            return None
+        red_king = self.game.team_king("red")
+        origin = (red_king.x, red_king.y)
+        if self.game.custom_level_active:
+            # Editor battles expand from the Crimson King one foothold at a
+            # time, irrespective of native or Verdant ownership.
+            return min(
+                candidates,
+                key=lambda checkpoint: (
+                    dist(origin, (checkpoint.x, checkpoint.y)),
+                    checkpoint.uid,
+                ),
+            )
+        return min(
+            candidates,
+            key=lambda checkpoint: (
+                0 if checkpoint.owner == "green" else 1,
+                -self.checkpoint_attack_ratio(members, checkpoint)
+                if members else 0,
+                dist(origin, (checkpoint.x, checkpoint.y)),
+                checkpoint.uid,
+            ),
+        )
+
+    def strategic_objective(self, members=()):
+        if self.game.level.has_checkpoints:
+            current = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+            if current is not None and current.owner != "red":
+                return current
+            checkpoint = self._select_checkpoint_objective(members)
+            if checkpoint is not None:
+                self.checkpoint_target_uid = checkpoint.uid
+                return checkpoint
+            self.checkpoint_target_uid = None
+        return self.game.team_king("green")
+
     def _living_red_units(self):
         return [
             unit for unit in self.game.units
@@ -921,6 +1848,35 @@ class EnemyAI:
     def _squad_units(self):
         by_uid = {unit.uid: unit for unit in self._living_red_units()}
         return [by_uid[uid] for uid in sorted(self.squad) if uid in by_uid]
+
+    def _checkpoint_guard_uids(self):
+        return {
+            uid
+            for guards in self.checkpoint_guards.values()
+            for uid in guards
+        }
+
+    def _checkpoint_guard_for(self, unit):
+        return next(
+            (
+                self.game.checkpoint_by_uid(checkpoint_uid)
+                for checkpoint_uid, guards in sorted(
+                    self.checkpoint_guards.items()
+                )
+                if unit.uid in guards
+            ),
+            None,
+        )
+
+    def _checkpoint_guard_destination(self, checkpoint, unit):
+        living = {member.uid for member in self._living_red_units()}
+        guards = sorted(self.checkpoint_guards.get(checkpoint.uid, set()) & living)
+        index = guards.index(unit.uid)
+        angle = math.tau * index / max(1, len(guards))
+        return (
+            checkpoint.x + math.cos(angle) * 1.25,
+            checkpoint.y + math.sin(angle) * 1.25,
+        )
 
     def _group_essence(self, units):
         """Return recruitment cost of living, purchasable units in a group."""
@@ -936,6 +1892,14 @@ class EnemyAI:
         self.recovery_guards.intersection_update(living)
         self.reserve.intersection_update(living)
         self.defenders.intersection_update(living)
+        self.checkpoint_guards = {
+            checkpoint_uid: guards & living
+            for checkpoint_uid, guards in self.checkpoint_guards.items()
+            if guards & living or (
+                (checkpoint := self.game.checkpoint_by_uid(checkpoint_uid))
+                is not None and checkpoint.owner == "red"
+            )
+        }
         self.formation_roles = {
             uid: role for uid, role in self.formation_roles.items()
             if uid in living and uid in self.squad
@@ -960,9 +1924,13 @@ class EnemyAI:
         ]
         index = role_units.index(unit)
         lateral = (index - (len(role_units) - 1) / 2) * self.FRONT_SPACING
+        direction_target = anchor or (
+            self.game.team_king("green").x,
+            self.game.team_king("green").y,
+        )
         advance_x, advance_y = self._unit_vector(
             (self.game.team_king("red").x, self.game.team_king("red").y),
-            (self.game.team_king("green").x, self.game.team_king("green").y),
+            direction_target,
         )
         side_x, side_y = -advance_y, advance_x
         forward_offset = self.FORMATION_FORWARD_OFFSETS[role]
@@ -972,8 +1940,94 @@ class EnemyAI:
             anchor_y - advance_y * forward_offset + side_y * lateral,
         ))
 
-    def _assign_available_units(self):
+    def _assign_custom_available_units(self):
+        """Fill editor garrisons first, then assign every surplus unit to attack."""
         living_units = self._living_red_units()
+        by_uid = {unit.uid: unit for unit in living_units}
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
+
+        self.reserve.intersection_update(by_uid)
+        while len(self.reserve) < self.CUSTOM_KING_GARRISON_SIZE:
+            hold_guards = self._checkpoint_guard_uids()
+            candidate = min(
+                (
+                    unit for unit in living_units
+                    if unit.uid not in self.reserve
+                    and unit.uid not in hold_guards
+                    and unit.uid not in self.defenders
+                ),
+                key=lambda unit: (
+                    unit.kind != "shield",
+                    dist((unit.x, unit.y), king_pos),
+                    unit.uid,
+                ),
+                default=None,
+            )
+            if candidate is None:
+                break
+            self.squad.discard(candidate.uid)
+            self.formation_roles.pop(candidate.uid, None)
+            self.reserve.add(candidate.uid)
+            candidate.target = None
+
+        for checkpoint_uid in sorted(self.checkpoint_guards):
+            checkpoint = self.game.checkpoint_by_uid(checkpoint_uid)
+            if checkpoint is None:
+                continue
+            guards = self.checkpoint_guards[checkpoint_uid]
+            while len(guards) < self.CUSTOM_CHECKPOINT_GARRISON_SIZE:
+                hold_guards = self._checkpoint_guard_uids()
+                candidate = min(
+                    (
+                        unit for unit in living_units
+                        if unit.uid not in self.reserve
+                        and unit.uid not in hold_guards
+                        and unit.uid not in self.defenders
+                    ),
+                    key=lambda unit: (
+                        dist((unit.x, unit.y), (checkpoint.x, checkpoint.y)),
+                        unit.uid,
+                    ),
+                    default=None,
+                )
+                if candidate is None:
+                    break
+                self.squad.discard(candidate.uid)
+                self.formation_roles.pop(candidate.uid, None)
+                guards.add(candidate.uid)
+                candidate.target = None
+                candidate.target_pos = self._checkpoint_guard_destination(
+                    checkpoint, candidate
+                )
+
+        hold_guards = self._checkpoint_guard_uids()
+        available = [
+            unit for unit in living_units
+            if unit.uid not in self.reserve
+            and unit.uid not in hold_guards
+            and unit.uid not in self.defenders
+        ]
+        for unit in sorted(available, key=lambda member: member.uid):
+            self.squad.add(unit.uid)
+            self.formation_roles[unit.uid] = self.FORMATION_ROLE_BY_KIND[unit.kind]
+            unit.target = None
+        for unit in living_units:
+            if unit.uid in self.reserve:
+                unit.target = None
+                unit.target_pos = self._reserve_position(unit)
+        squad_units = self._squad_units()
+        for unit in squad_units:
+            unit.target_pos = self._formation_destination(unit, squad_units)
+
+    def _assign_available_units(self):
+        if self.game.custom_level_active:
+            self._assign_custom_available_units()
+            return
+        hold_guards = self._checkpoint_guard_uids()
+        living_units = [
+            unit for unit in self._living_red_units()
+            if unit.uid not in hold_guards
+        ]
         # A home reserve may never strand enough purchasable essence to form a
         # normal attack wave. Release reserved units until the proposed squad
         # can reach the target.
@@ -1038,6 +2092,158 @@ class EnemyAI:
             if self.state in (AIState.BUILDING, AIState.RALLYING):
                 unit.target_pos = self._formation_destination(unit, squad_units)
 
+    def _assign_checkpoint_reinforcements(self):
+        """Feed fresh recruits into an active hold assault as one formation."""
+        if self.state != AIState.ATTACKING:
+            return
+        checkpoint = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+        if checkpoint is None or checkpoint.owner == "red":
+            return
+        if not any(
+            dist((unit.x, unit.y), (checkpoint.x, checkpoint.y))
+            <= checkpoint.profile.defender_leash + self.FORMATION_TOLERANCE
+            for unit in self._squad_units()
+        ):
+            return
+        assigned = (
+            self.squad | self.reserve | self.defenders
+            | self._checkpoint_guard_uids()
+        )
+        for unit in self._living_red_units():
+            if unit.uid in assigned:
+                continue
+            self.squad.add(unit.uid)
+            self.formation_roles[unit.uid] = self.FORMATION_ROLE_BY_KIND[unit.kind]
+            unit.target = None
+
+    def _reinforce_custom_garrisons_from_unassigned(self):
+        """Give fresh editor recruits to depleted garrisons before an assault."""
+        if not self.game.custom_level_active:
+            return
+        living_units = self._living_red_units()
+        assigned = (
+            self.squad | self.reserve | self.defenders
+            | self._checkpoint_guard_uids()
+        )
+        available = [unit for unit in living_units if unit.uid not in assigned]
+        king_pos = (self.game.team_king("red").x, self.game.team_king("red").y)
+        while (
+            available
+            and len(self.reserve) < self.CUSTOM_KING_GARRISON_SIZE
+        ):
+            unit = min(
+                available,
+                key=lambda candidate: (
+                    candidate.kind != "shield",
+                    dist((candidate.x, candidate.y), king_pos),
+                    candidate.uid,
+                ),
+            )
+            available.remove(unit)
+            self.reserve.add(unit.uid)
+            unit.target = None
+            unit.target_pos = self._reserve_position(unit)
+        for checkpoint_uid in sorted(self.checkpoint_guards):
+            checkpoint = self.game.checkpoint_by_uid(checkpoint_uid)
+            if checkpoint is None:
+                continue
+            guards = self.checkpoint_guards[checkpoint_uid]
+            while (
+                available
+                and len(guards) < self.CUSTOM_CHECKPOINT_GARRISON_SIZE
+            ):
+                unit = min(
+                    available,
+                    key=lambda candidate: (
+                        dist(
+                            (candidate.x, candidate.y),
+                            (checkpoint.x, checkpoint.y),
+                        ),
+                        candidate.uid,
+                    ),
+                )
+                available.remove(unit)
+                guards.add(unit.uid)
+                unit.target = None
+                unit.target_pos = self._checkpoint_guard_destination(
+                    checkpoint, unit
+                )
+
+    def _secure_captured_editor_checkpoint(self):
+        """Garrison a captured editor hold and begin assembling the next wave."""
+        if not self.game.custom_level_active or self.state != AIState.ATTACKING:
+            return False
+        checkpoint = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+        if checkpoint is None or checkpoint.owner != "red":
+            return False
+        guards = self.checkpoint_guards.setdefault(checkpoint.uid, set())
+        members = self._squad_units()
+        guard_slots = max(
+            0, self.CUSTOM_CHECKPOINT_GARRISON_SIZE - len(guards)
+        )
+        new_guards = sorted(
+            members,
+            key=lambda unit: (
+                dist((unit.x, unit.y), (checkpoint.x, checkpoint.y)),
+                unit.uid,
+            ),
+        )[:guard_slots]
+        guards.update(unit.uid for unit in new_guards)
+        for unit in new_guards:
+            unit.target = None
+            unit.target_pos = self._checkpoint_guard_destination(
+                checkpoint, unit
+            )
+        self.squad.difference_update(guards)
+        self.recovery_guards.clear()
+        self.formation_roles = {
+            uid: role for uid, role in self.formation_roles.items()
+            if uid in self.squad
+        }
+        self.wave_start_strength = 0
+        self.rally_elapsed = 0.0
+        self.checkpoint_target_uid = None
+        self.checkpoint_route = ()
+        self.checkpoint_route_index = 0
+        self.formation_checkpoint_uid = None
+        self.formation_anchor = None
+        self.transition_to(AIState.RALLYING)
+        return True
+
+    def _position_checkpoint_guards(self):
+        """Return idle editor garrisons to a tight ring around their hold."""
+        living = {unit.uid: unit for unit in self._living_red_units()}
+        for checkpoint_uid, guard_uids in sorted(self.checkpoint_guards.items()):
+            checkpoint = self.game.checkpoint_by_uid(checkpoint_uid)
+            if checkpoint is None:
+                continue
+            for uid in sorted(guard_uids):
+                unit = living.get(uid)
+                if unit is not None and unit.target is None:
+                    unit.target_pos = self._checkpoint_guard_destination(
+                        checkpoint, unit
+                    )
+
+    def _custom_garrisons_ready(self):
+        if not self.game.custom_level_active:
+            return True
+        if len(self.reserve) < self.CUSTOM_KING_GARRISON_SIZE:
+            return False
+        return all(
+            len(guards) >= self.CUSTOM_CHECKPOINT_GARRISON_SIZE
+            for checkpoint_uid, guards in self.checkpoint_guards.items()
+            if self.game.checkpoint_by_uid(checkpoint_uid) is not None
+        )
+
+    def _position_custom_king_garrison(self):
+        if not self.game.custom_level_active:
+            return
+        living = {unit.uid: unit for unit in self._living_red_units()}
+        for uid in sorted(self.reserve):
+            unit = living.get(uid)
+            if unit is not None and unit.target is None:
+                unit.target_pos = self._reserve_position(unit)
+
     def _reserve_position(self, unit):
         index = sorted(self.reserve).index(unit.uid) if unit.uid in self.reserve else 0
         return (
@@ -1070,7 +2276,7 @@ class EnemyAI:
                     "swordsman": 2.0,
                     "archer": 1.5,
                     "shield": 2.4,
-                }[unit.kind]
+                }.get(unit.kind, 1.5 if unit.is_ranged else 2.0)
                 danger *= max(.25, unit.health / unit.max_health)
                 if attacking_king:
                     danger += 2.5
@@ -1208,7 +2414,10 @@ class EnemyAI:
     def evaluate_engaged_combat_groups(self):
         """Refresh assessments for the AI's existing strategic combat groups."""
         groups = []
-        for uids in (self.squad, self.defenders, self.reserve):
+        for uids in (
+            self.squad, self.defenders, self.reserve,
+            *self.checkpoint_guards.values(),
+        ):
             units = [
                 unit for unit in self._living_red_units() if unit.uid in uids
             ]
@@ -1279,8 +2488,8 @@ class EnemyAI:
 
     def _attack_objective_is_reachable(self):
         """Return whether the open battlefield has a usable attack objective."""
-        objective = self.game.team_king("green")
-        if objective is None or objective.health <= 0:
+        objective = self.strategic_objective(self._squad_units())
+        if objective is None or getattr(objective, "health", 1) <= 0:
             return False
         return (
             math.isfinite(objective.x)
@@ -1298,13 +2507,25 @@ class EnemyAI:
         return None
 
     def _king_within_commitment_radius(self):
-        """Keep a wave committed once any member reaches the player king."""
-        objective = self.game.team_king("green")
-        if objective is None or objective.health <= 0:
+        """Keep a wave committed once any member reaches its strategic objective."""
+        objective = self.strategic_objective(self._squad_units())
+        if objective is None or getattr(objective, "health", 1) <= 0:
             return False
         return any(
             dist((unit.x, unit.y), (objective.x, objective.y))
             <= self.OBJECTIVE_COMMITMENT_RADIUS
+            for unit in self._squad_units()
+        )
+
+    def _checkpoint_within_commitment_radius(self):
+        if not self.game.level.has_checkpoints:
+            return False
+        checkpoint = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+        if checkpoint is None or checkpoint.owner == "red":
+            return False
+        return any(
+            dist((unit.x, unit.y), (checkpoint.x, checkpoint.y))
+            <= checkpoint.profile.defender_leash + self.FORMATION_TOLERANCE
             for unit in self._squad_units()
         )
 
@@ -1321,7 +2542,9 @@ class EnemyAI:
 
     def _can_finish_objective(self, assessment):
         """Keep firing on a nearly defeated king unless defenders dominate."""
-        objective = self.game.team_king("green")
+        objective = self.strategic_objective(self._squad_units())
+        if isinstance(objective, Checkpoint):
+            return False
         if objective is None or objective.health <= 0:
             return False
         attackers = [
@@ -1384,7 +2607,8 @@ class EnemyAI:
     def known_player_composition(self):
         counts = {kind: 0 for kind in UNIT_KINDS}
         for kind, _ in self.player_knowledge.values():
-            counts[kind] += 1
+            if kind in counts:
+                counts[kind] += 1
         return counts
 
     def last_seen_player_composition(self):
@@ -1392,8 +2616,9 @@ class EnemyAI:
         counts = {kind: 0 for kind in UNIT_KINDS}
         essence = {kind: 0 for kind in UNIT_KINDS}
         for sighting in self.last_seen_player_army.values():
-            counts[sighting.kind] += 1
-            essence[sighting.kind] += UNIT_COSTS[sighting.kind]
+            if sighting.kind in counts:
+                counts[sighting.kind] += 1
+                essence[sighting.kind] += UNIT_COSTS[sighting.kind]
         return counts, essence
 
     def _update_archer_threat_level(self):
@@ -1431,13 +2656,17 @@ class EnemyAI:
         own = {kind: 0 for kind in UNIT_KINDS}
         assigned = {kind: 0 for kind in UNIT_KINDS}
         squad_counts = {kind: 0 for kind in UNIT_KINDS}
-        assigned_uids = self.squad | self.reserve | self.defenders
+        assigned_uids = (
+            self.squad | self.reserve | self.defenders
+            | self._checkpoint_guard_uids()
+        )
         for unit in self._living_red_units():
-            own[unit.kind] += 1
-            if unit.uid in assigned_uids:
-                assigned[unit.kind] += 1
-            if unit.uid in self.squad:
-                squad_counts[unit.kind] += 1
+            if unit.kind in own:
+                own[unit.kind] += 1
+                if unit.uid in assigned_uids:
+                    assigned[unit.kind] += 1
+                if unit.uid in self.squad:
+                    squad_counts[unit.kind] += 1
         known = self.known_player_composition()
         known_total = sum(known.values())
         scores = {
@@ -1526,22 +2755,31 @@ class EnemyAI:
         """Return current red-army essence invested in each unit kind."""
         invested = {kind: 0 for kind in ENEMY_PRODUCTION_KINDS}
         for unit in self._living_red_units():
-            invested[unit.kind] += UNIT_COSTS[unit.kind]
+            if unit.kind in invested:
+                invested[unit.kind] += UNIT_COSTS[unit.kind]
         return invested
 
     def production_target_shares(self):
         """Return strategic counter shares, always measured by essence cost."""
+        if self.game.level.has_checkpoints and self.state in (
+            AIState.BUILDING, AIState.RALLYING, AIState.ATTACKING
+        ):
+            checkpoint = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+            if checkpoint is None or checkpoint.owner == "red":
+                checkpoint = self._select_checkpoint_objective(
+                    self._squad_units()
+                )
+            if checkpoint is not None:
+                self.checkpoint_target_uid = checkpoint.uid
+                if checkpoint.owner == checkpoint.native_faction:
+                    return self.CHECKPOINT_PRODUCTION_SHARES[
+                        checkpoint.native_faction
+                    ].copy()
         if not self.learned_counter_essence:
-            return {
-                kind: 1 / len(ENEMY_PRODUCTION_KINDS)
-                for kind in ENEMY_PRODUCTION_KINDS
-            }
+            return self.STANDARD_PRODUCTION_SHARES.copy()
         total = sum(self.learned_counter_essence.values())
         if total <= 0:
-            return {
-                kind: 1 / len(ENEMY_PRODUCTION_KINDS)
-                for kind in ENEMY_PRODUCTION_KINDS
-            }
+            return self.STANDARD_PRODUCTION_SHARES.copy()
         return {
             kind: self.learned_counter_essence.get(kind, 0) / total
             for kind in ENEMY_PRODUCTION_KINDS
@@ -1664,6 +2902,7 @@ class EnemyAI:
             unit for unit in red_units
             if unit.uid not in self.defenders and unit.uid not in self.reserve
             and unit.uid not in self.squad
+            and unit.uid not in self._checkpoint_guard_uids()
             and dist((unit.x, unit.y), king_pos) <= self.DEFENDER_ASSIGN_RADIUS
         ]
         selected.extend(sorted(
@@ -1706,9 +2945,14 @@ class EnemyAI:
     def _finish_defense(self):
         living = {unit.uid for unit in self._living_red_units()}
         survivors = self.defenders & living
+        reserve_size = (
+            self.CUSTOM_KING_GARRISON_SIZE
+            if self.game.custom_level_active
+            else self.DEFENSIVE_RESERVE_SIZE
+        )
         self.reserve = set(sorted(
             (self.reserve | survivors) & living
-        )[:self.DEFENSIVE_RESERVE_SIZE])
+        )[:reserve_size])
         for uid in survivors:
             self.squad.discard(uid)
             self.formation_roles.pop(uid, None)
@@ -1751,8 +2995,88 @@ class EnemyAI:
         members = tuple(self._squad_units())
         if not members:
             return False
+        if not self._custom_garrisons_ready():
+            self.last_launch_gate = {
+                "time": self.elapsed,
+                "squad_essence": self._group_essence(members),
+                "decision": "garrison_wait",
+                "target": (
+                    f"checkpoint:{self.checkpoint_target_uid}"
+                    if self.checkpoint_target_uid is not None else "king"
+                ),
+                "observation_revision": self.combat_observation_revision,
+            }
+            return False
+        minimum_units = (
+            self.LEVEL_FIVE_MIN_ATTACK_UNITS
+            if self.game.level_number == 5
+            else self.CHECKPOINT_MIN_ATTACK_UNITS
+            if self.game.level.has_checkpoints
+            else 0
+        )
         squad_essence = self._group_essence(members)
+        if self.game.level.has_checkpoints:
+            checkpoint = self._select_checkpoint_objective(members)
+            if checkpoint is not None:
+                self.checkpoint_target_uid = checkpoint.uid
+                defenders, route, eta, defender_composition = (
+                    self.projected_checkpoint_defenders(checkpoint, members)
+                )
+                own_strength = self._raw_group_strength(members, defenders)
+                opponent_strength = self._raw_group_strength(defenders, members)
+                ratio = (
+                    math.inf if not defenders
+                    else own_strength / max(
+                        opponent_strength,
+                        CombatStrengthEvaluator.MIN_STRENGTH,
+                    )
+                )
+                passed = (
+                    ratio >= self.CHECKPOINT_ATTACK_RATIO
+                    and len(members) >= minimum_units
+                )
+                attacker_composition = {
+                    kind: sum(unit.kind == kind for unit in members)
+                    for kind in ENEMY_PRODUCTION_KINDS
+                }
+                self.projected_arrival_eta = eta
+                self.projected_defender_count = len(defenders)
+                self.projected_defender_strength = opponent_strength
+                self.projected_defender_composition = defender_composition.copy()
+                diagnostic = {
+                    "time": self.elapsed,
+                    "own_strength": own_strength,
+                    "opponent_strength": opponent_strength,
+                    "ratio": ratio,
+                    "squad_essence": squad_essence,
+                    "decision": (
+                        "checkpoint_strength_pass" if passed
+                        else "checkpoint_force_wait"
+                        if len(members) < minimum_units
+                        else "checkpoint_strength_hold"
+                    ),
+                    "checkpoint_uid": checkpoint.uid,
+                    "target": f"checkpoint:{checkpoint.uid}",
+                    "eta": eta,
+                    "projected_defender_count": len(defenders),
+                    "projected_defender_strength": opponent_strength,
+                    "projected_defender_composition": defender_composition,
+                    "projected_attacker_composition": attacker_composition,
+                    "route": route,
+                    "observation_revision": self.combat_observation_revision,
+                }
+                signature = (
+                    tuple((unit.uid, unit.kind, round(unit.health, 6)) for unit in members),
+                    tuple((unit.uid, unit.kind, round(unit.health, 6)) for unit in defenders),
+                    diagnostic["decision"], checkpoint.uid,
+                )
+                self.last_launch_gate = diagnostic
+                if signature != self._launch_gate_signature:
+                    self.launch_gate_history.append(diagnostic.copy())
+                    self._launch_gate_signature = signature
+                return passed
         cost_ready = squad_essence >= self.TARGET_GROUP_ESSENCE
+        force_ready = len(members) >= minimum_units
         if not self.last_seen_player_army:
             assessment = self.combat_evaluator.assess(
                 members,
@@ -1767,13 +3091,13 @@ class EnemyAI:
                 "ratio": assessment.advantage_ratio,
                 "squad_essence": squad_essence,
                 "decision": (
-                    "bootstrap_ready"
-                    if cost_ready
+                    "bootstrap_ready" if cost_ready and force_ready
+                    else "force_wait" if not force_ready
                     else "bootstrap_wait"
                 ),
                 "observation_revision": self.combat_observation_revision,
             }
-            passed = cost_ready
+            passed = cost_ready and force_ready
         else:
             opponents = tuple(
                 ObservedCombatUnit(
@@ -1793,7 +3117,7 @@ class EnemyAI:
                 self.elapsed,
                 self.combat_observation_revision,
             )
-            passed = cost_ready and (
+            passed = cost_ready and force_ready and (
                 assessment.advantage_ratio
                 >= self.combat_evaluator.STRONGER_RATIO
             )
@@ -1804,7 +3128,8 @@ class EnemyAI:
                 "ratio": assessment.advantage_ratio,
                 "squad_essence": squad_essence,
                 "decision": (
-                    "essence_wait" if not cost_ready
+                    "force_wait" if not force_ready
+                    else "essence_wait" if not cost_ready
                     else "strength_pass" if passed
                     else "strength_hold"
                 ),
@@ -1840,6 +3165,10 @@ class EnemyAI:
             "wait": self.rally_elapsed,
             "composition": composition,
             "squad_essence": self._group_essence(members),
+            "objective": (
+                f"checkpoint:{self.checkpoint_target_uid}"
+                if self.checkpoint_target_uid is not None else "king"
+            ),
             "launch_gate": self.last_launch_gate.copy()
             if self.last_launch_gate else None,
         })
@@ -1849,7 +3178,80 @@ class EnemyAI:
         self.last_combat_decision = None
         for unit in members:
             unit.target = None
+        checkpoint = self.game.checkpoint_by_uid(self.checkpoint_target_uid)
+        if checkpoint is not None and checkpoint.owner != "red":
+            self.checkpoint_route = self._terrain_route_to_checkpoint(checkpoint)
+            self.checkpoint_route_index = min(1, len(self.checkpoint_route) - 1)
+            self.formation_checkpoint_uid = checkpoint.uid
+            self.formation_anchor = self.checkpoint_route[0]
+        else:
+            self.checkpoint_route = ()
+            self.checkpoint_route_index = 0
+            self.formation_checkpoint_uid = None
+            self.formation_anchor = None
         self._advance_wave()
+
+    def _advance_checkpoint_formation(self, checkpoint, members):
+        """Move one shared route anchor only when three quarters stay formed."""
+        if (
+            checkpoint.owner == checkpoint.native_faction
+            and not checkpoint.defender_uids
+        ):
+            ordered = sorted(members, key=lambda unit: unit.uid)
+            for index, unit in enumerate(ordered):
+                angle = math.tau * index / max(1, len(ordered))
+                unit.target_pos = (
+                    checkpoint.x + math.cos(angle) * 1.25,
+                    checkpoint.y + math.sin(angle) * 1.25,
+                )
+            return
+        if (
+            self.formation_checkpoint_uid != checkpoint.uid
+            or not self.checkpoint_route
+            or self.formation_anchor is None
+        ):
+            self.checkpoint_route = self._terrain_route_to_checkpoint(checkpoint)
+            self.checkpoint_route_index = min(1, len(self.checkpoint_route) - 1)
+            self.formation_checkpoint_uid = checkpoint.uid
+            self.formation_anchor = self.checkpoint_route[0]
+        destinations = {
+            unit.uid: self._formation_destination(
+                unit, members, anchor=self.formation_anchor
+            )
+            for unit in members
+        }
+        cohesive = sum(
+            dist((unit.x, unit.y), destinations[unit.uid])
+            <= self.FORMATION_TOLERANCE
+            for unit in members
+        ) / len(members)
+        if cohesive >= self.CHECKPOINT_COHESION_FRACTION:
+            remaining = (
+                min(unit.speed for unit in members) * self.decision_interval
+                * terrain_movement_multiplier(
+                    self.game.terrain_kind_at(self.formation_anchor)
+                )
+            )
+            anchor_x, anchor_y = self.formation_anchor
+            while remaining > 1e-9 and self.checkpoint_route_index < len(
+                self.checkpoint_route
+            ):
+                waypoint = self.checkpoint_route[self.checkpoint_route_index]
+                segment = dist((anchor_x, anchor_y), waypoint)
+                if segment <= remaining + 1e-9:
+                    anchor_x, anchor_y = waypoint
+                    remaining -= segment
+                    self.checkpoint_route_index += 1
+                else:
+                    anchor_x += (waypoint[0] - anchor_x) / segment * remaining
+                    anchor_y += (waypoint[1] - anchor_y) / segment * remaining
+                    remaining = 0.0
+            self.formation_anchor = clamp_to_map((anchor_x, anchor_y))
+        for unit in members:
+            if unit.target is None:
+                unit.target_pos = self._formation_destination(
+                    unit, members, anchor=self.formation_anchor
+                )
 
     def _advance_wave(self):
         """Advance toward the objective while allowing local combat to take priority."""
@@ -1857,9 +3259,21 @@ class EnemyAI:
         members = self._squad_units()
         if not members:
             return
+        strategic_objective = self.strategic_objective(members)
+        if strategic_objective is None:
+            return
+        if isinstance(strategic_objective, Checkpoint):
+            self._advance_checkpoint_formation(strategic_objective, members)
+            return
+        objective = (strategic_objective.x, strategic_objective.y)
+        direction_target = (
+            objective
+            if isinstance(strategic_objective, Checkpoint)
+            else (self.game.team_king("green").x, self.game.team_king("green").y)
+        )
         advance_x, advance_y = self._unit_vector(
             (self.game.team_king("red").x, self.game.team_king("red").y),
-            (self.game.team_king("green").x, self.game.team_king("green").y),
+            direction_target,
         )
         formation_progress = {
             unit.uid: (
@@ -1874,7 +3288,6 @@ class EnemyAI:
             self.WAVE_COHESION_TOLERANCE
             - max(self.FORMATION_FORWARD_OFFSETS.values()),
         )
-        objective = (self.game.team_king("green").x, self.game.team_king("green").y)
         for unit in members:
             if unit.target is not None:
                 continue
@@ -1984,7 +3397,7 @@ class EnemyAI:
         if not self.game.is_team_visible(unit.team, target.x, target.y):
             return False
         return dist((unit.x, unit.y), (target.x, target.y)) <= max(
-            self.AWARENESS_RADIUS, self.game.effective_attack_range(unit)
+            self.auto_engagement_radius(), self.game.effective_attack_range(unit)
         )
 
     def retreat_ordered(self, unit):
@@ -1994,6 +3407,12 @@ class EnemyAI:
             and unit.uid in self.squad
             and unit.uid not in self.recovery_guards
         )
+
+    def auto_engagement_radius(self):
+        """Limit idle armies without reducing active attack or defense awareness."""
+        if self.state in (AIState.ATTACKING, AIState.DEFENDING):
+            return self.AWARENESS_RADIUS
+        return self.PASSIVE_ENGAGEMENT_RADIUS
 
     def _threatens(self, target, protected):
         if target.target is protected:
@@ -2090,14 +3509,32 @@ class EnemyAI:
             )
             return unit.target
 
+        guard_checkpoint = self._checkpoint_guard_for(unit)
+        guards_king = self.game.custom_level_active and unit.uid in self.reserve
+        red_king = self.game.team_king("red")
+
+        def eligible(target):
+            return self._is_valid_target(unit, target) and (
+                guard_checkpoint is None
+                or dist(
+                    (target.x, target.y),
+                    (guard_checkpoint.x, guard_checkpoint.y),
+                ) <= guard_checkpoint.profile.defender_leash
+            ) and (
+                not guards_king
+                or red_king is not None and dist(
+                    (target.x, target.y), (red_king.x, red_king.y)
+                ) <= self.KING_DEFENSE_RADIUS
+            )
+
         candidates = [
             opponent for opponent in self.game.nearby_units(
-                unit, max(self.AWARENESS_RADIUS,
+                unit, max(self.auto_engagement_radius(),
                           self.game.effective_attack_range(unit))
             )
-            if self._is_valid_target(unit, opponent)
+            if eligible(opponent)
         ]
-        current = unit.target if self._is_valid_target(unit, unit.target) else None
+        current = unit.target if eligible(unit.target) else None
         if not candidates:
             unit.target = None
             return None
@@ -2128,7 +3565,14 @@ class EnemyAI:
     def _constrain_tactical_position(self, unit, position):
         """Keep local steering subordinate to the current strategic posture."""
         x, y = position
-        if self.state == AIState.DEFENDING:
+        guard_checkpoint = self._checkpoint_guard_for(unit)
+        if guard_checkpoint is not None:
+            anchor = (guard_checkpoint.x, guard_checkpoint.y)
+            radius = guard_checkpoint.profile.defender_leash
+        elif self.game.custom_level_active and unit.uid in self.reserve:
+            anchor = (self.game.team_king("red").x, self.game.team_king("red").y)
+            radius = self.KING_DEFENSE_RADIUS
+        elif self.state == AIState.DEFENDING:
             anchor = (self.game.team_king("red").x, self.game.team_king("red").y)
             radius = self.KING_DEFENSE_RADIUS
         elif self.state in (AIState.RALLYING, AIState.BUILDING, AIState.RECOVERING):
@@ -2291,6 +3735,10 @@ class EnemyAI:
         threats = self._player_threats()
         threat_score = sum(danger for _, danger in threats)
         self.last_threat_score = threat_score
+        self._cleanup_squad()
+        self._secure_captured_editor_checkpoint()
+        self._position_checkpoint_guards()
+        self._position_custom_king_garrison()
 
         if (
             self.state != AIState.DEFENDING
@@ -2348,6 +3796,8 @@ class EnemyAI:
         self._run_production(threat_score)
 
         self._cleanup_squad()
+        self._reinforce_custom_garrisons_from_unassigned()
+        self._assign_checkpoint_reinforcements()
         red_units = self._living_red_units()
 
         if self.state == AIState.BUILDING and red_units:
@@ -2358,7 +3808,12 @@ class EnemyAI:
             self.rally_elapsed += self.decision_interval
             self._assign_available_units()
             strength_gate_passed = self._launch_strength_gate()
-            timed_out = self.rally_elapsed >= self.MAX_RALLY_WAIT
+            rally_limit = (
+                self.CHECKPOINT_MAX_RALLY_WAIT
+                if self.game.level.has_checkpoints and self.checkpoint_target_uid is not None
+                else self.MAX_RALLY_WAIT
+            )
+            timed_out = self.rally_elapsed >= rally_limit
             if self.last_seen_player_army:
                 launch_ready = (
                     strength_gate_passed
@@ -2399,6 +3854,8 @@ class EnemyAI:
                     if hard_safety_reason == "no_viable_combat_units"
                     else None
                 )
+            elif self._checkpoint_within_commitment_radius():
+                self._advance_wave()
             elif self._king_within_commitment_radius():
                 self._advance_wave()
             elif self._can_finish_objective(field_assessment):
@@ -2463,20 +3920,67 @@ class Game:
         self.button_font = pygame.font.Font(None, 25)
         self.button_cost_font = pygame.font.Font(None, 18)
         self.state = "menu"
+        # This is deliberately a presentation setting.  Team visibility sets
+        # continue to drive targeting, combat, AI knowledge, and exploration.
+        self.fog_of_war_enabled = True
         self.play_btn = Button((WIDTH // 2 - 100, HEIGHT // 2 + 85, 200, 62), "Play!")
+        self.editor_btn = Button((WIDTH // 2 - 100, HEIGHT // 2 + 151, 200, 44), "Level Editor")
+        self.fog_btn = Button((WIDTH // 2 - 100, HEIGHT // 2 + 160, 200, 44), "")
+        self.pause_fog_btn = Button((WIDTH // 2 - 120, HEIGHT // 2 + 24, 240, 44), "")
         self.level_buttons = []
+        self.selected_level_page = 1
+        self.level_nav_buttons = []
+        self.level_dot_rects = []
+        self.level_location_rects = []
+        self.checkpoint_bar_entries = []
         self.level_number = 3
         self.level = LEVELS[self.level_number]
+        self.custom_level_active = False
         self.enemy_rng = enemy_rng
         self.ai_decision_interval = ai_decision_interval
         self.terrain_seed = TERRAIN_SEED if terrain_seed is None else terrain_seed
         self.reset()
+        try:
+            self.editor_draft = EditorLevelDraft.from_dict(
+                json.loads(CUSTOM_LEVEL_FILE.read_text(encoding="utf-8"))
+            )
+            self.editor_notice = "Saved custom level loaded"
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            self.editor_draft = make_default_editor_draft()
+            self.editor_notice = "Expanded 200 × 200 canvas ready"
+        self.editor_tab = "paint"
+        self.editor_tool = "path"
+        self.editor_brush_size = 3
+        self.editor_dragging = False
+        self.editor_slider_dragging = None
+        self.editor_revision = 0
+        self._editor_map_cache_key = None
+        self._editor_map_cache = None
+        self.editor_buttons = []
+        self.editor_sliders = []
+        self.editor_canvas = pygame.Rect(0, 0, 0, 0)
+        self.editor_map_rect = pygame.Rect(0, 0, 0, 0)
+        self.editor_random_hold_count = 3
+        self.editor_random_hold_connections = 100
+        self.editor_random_path_amount = 25
+        self.editor_random_terrain_weights = {
+            "plains": 33, "forest": 33, "mountain": 34,
+        }
 
     def reset(self, level_number=None):
         if level_number is not None:
             self.level_number = level_number
-        self.level = LEVELS[self.level_number]
-        configure_map(self.level.map_size)
+            self.custom_level_active = False
+        if not self.custom_level_active:
+            self.level = LEVELS[self.level_number]
+            configure_map(self.level.map_size)
+        else:
+            self.level = self.editor_draft.to_level_config()
+            configure_map(
+                self.level.map_size,
+                self.editor_draft.green_start,
+                self.editor_draft.red_start,
+            )
         self.units: list[Unit] = []
         self.unit_spatial_hash = UnitSpatialHash()
         self.essence = self.level.starting_essence
@@ -2520,6 +4024,8 @@ class Game:
         self.arrows = []
         self.particles = []
         self.king_slashes: list[SlashEffect] = []
+        self.checkpoints: list[Checkpoint] = []
+        self.checkpoint_bar_entries = []
         self.message = (
             "Defeat all enemy units"
             if self.level_number == 1
@@ -2530,6 +4036,14 @@ class Game:
         self.essence_tick = 0
         self.reveal_tick = 0
         self.terrain = self.make_terrain()
+        if self.level.has_checkpoints:
+            for checkpoint in self.checkpoints:
+                initial_count = (
+                    checkpoint.profile.initial_melee
+                    + checkpoint.profile.initial_ranged
+                )
+                for index in range(initial_count):
+                    self.spawn_checkpoint_defender(checkpoint, initial_index=index)
         for kind, dx, dy in self.level.player_starting_units:
             self.add_unit(kind, "green", *offset_from(GREEN_KING_POSITION, (dx, dy)))
         for kind, dx, dy in self.level.enemy_starting_units:
@@ -2549,10 +4063,20 @@ class Game:
 
     def start_level(self, level_number, terrain_seed=None):
         """Begin a fresh battlefield, preserving its seed for later retries."""
+        self.selected_level_page = level_number
         if terrain_seed is None:
             terrain_seed = random.SystemRandom().getrandbits(64)
         self.terrain_seed = terrain_seed
         self.reset(level_number)
+
+    def start_custom_level(self):
+        """Build and play the current editor draft without mutating campaign data."""
+        self.custom_level_active = True
+        self.level_number = 0
+        self.level = self.editor_draft.to_level_config()
+        self.fog_of_war_enabled = self.editor_draft.fog_of_war
+        self.terrain_seed = random.SystemRandom().getrandbits(64)
+        self.reset()
 
     def rebuild_unit_spatial_hash(self):
         """Snapshot all living units for local collision queries."""
@@ -2643,6 +4167,39 @@ class Game:
         return max(0, king.health) if king is not None else 0
 
     def make_terrain(self):
+        if self.custom_level_active:
+            terrain = dict(self.editor_draft.terrain)
+            self._terrain_region_count = 0
+            path_cells = tuple(sorted(
+                (
+                    position for position, cell in terrain.items()
+                    if cell.kind == "path"
+                ),
+                key=lambda position: (position[0], position[1]),
+            ))
+            self._terrain_road_routes = (path_cells,) if path_cells else ()
+            quiet_zones = (
+                (*self.editor_draft.green_start, 6.0),
+                (*self.editor_draft.red_start, 6.0),
+            )
+            self._terrain_protected_cells = {
+                (x, y)
+                for x in range(MAP_SIZE) for y in range(MAP_SIZE)
+                if any(
+                    (x + .5 - qx) ** 2 + (y + .5 - qy) ** 2 < radius ** 2
+                    for qx, qy, radius in quiet_zones
+                )
+            }
+            self.checkpoints = []
+            for uid, hold in enumerate(self.editor_draft.holds, 1):
+                cell_kind = terrain[(hold.x, hold.y)].kind
+                terrain_kind = cell_kind if cell_kind != "path" else "plains"
+                faction = CHECKPOINT_FACTION_BY_TERRAIN[terrain_kind]
+                self.checkpoints.append(Checkpoint(
+                    uid, hold.x + .5, hold.y + .5,
+                    terrain_kind, faction, faction, EDITOR_CHECKPOINT_PROFILE,
+                ))
+            return terrain
         rng = random.Random(
             f"verdant-crown:{self.terrain_seed}:{self.level_number}:{MAP_SIZE}"
         )
@@ -2707,7 +4264,154 @@ class Game:
         for (x, y), cell in terrain.items():
             if (x, y) in self._terrain_protected_cells:
                 terrain[(x, y)] = TerrainCell("plains", cell.variation)
+        if self.level.has_checkpoints:
+            self.checkpoints = self._make_checkpoints(rng, terrain)
+            road_routes = list(self._terrain_road_routes)
+            checkpoint_cells = {checkpoint.cell for checkpoint in self.checkpoints}
+            for checkpoint in self.checkpoints:
+                spur = self._make_checkpoint_road_spur(checkpoint, terrain)
+                road_routes.append(tuple(spur))
+                for x, y in spur:
+                    if (x, y) in checkpoint_cells:
+                        continue
+                    variation = terrain[(x, y)].variation
+                    terrain[(x, y)] = TerrainCell("path", variation)
+            self._terrain_road_routes = tuple(road_routes)
         return terrain
+
+    def _make_checkpoints(self, rng, terrain):
+        """Place biome holds and Level 5's deterministic large edge holds."""
+        checkpoints = []
+        occupied = []
+        road_cells = {
+            cell for route in self._terrain_road_routes for cell in route
+        }
+        for uid, terrain_kind in enumerate(("mountain", "forest", "plains"), 1):
+            candidates = []
+            for (x, y), cell in terrain.items():
+                position = (x + .5, y + .5)
+                if (
+                    cell.kind != terrain_kind
+                    or (x, y) in road_cells
+                    or (x, y) in self._terrain_protected_cells
+                    or x < 12 or y < 8 or x >= MAP_SIZE - 12 or y >= MAP_SIZE - 8
+                    or dist(position, GREEN_KING_POSITION) < 24
+                    or dist(position, RED_KING_POSITION) < 24
+                    or any(dist(position, previous) < 28 for previous in occupied)
+                ):
+                    continue
+                same_biome = sum(
+                    terrain.get((x + dx, y + dy), TerrainCell("path", 0)).kind
+                    == terrain_kind
+                    for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                )
+                if same_biome < 7:
+                    continue
+                nearest_road = min(
+                    (abs(x - rx) + abs(y - ry) for rx, ry in road_cells),
+                    default=MAP_SIZE,
+                )
+                if 4 <= nearest_road <= 28:
+                    candidates.append((nearest_road, rng.random(), x, y))
+            if not candidates:
+                # Region generation guarantees every biome; retain strict
+                # terrain/path separation if an unusually fragmented seed has
+                # no roomy candidate.
+                candidates = [
+                    (0, rng.random(), x, y)
+                    for (x, y), cell in terrain.items()
+                    if cell.kind == terrain_kind
+                    and (x, y) not in road_cells
+                    and (x, y) not in self._terrain_protected_cells
+                    and 3 <= x < MAP_SIZE - 3 and 3 <= y < MAP_SIZE - 3
+                    and all(dist((x + .5, y + .5), p) >= 20 for p in occupied)
+                ]
+            _, _, x, y = min(candidates, key=lambda entry: (entry[0], entry[1]))
+            faction = CHECKPOINT_FACTION_BY_TERRAIN[terrain_kind]
+            profile = (
+                LEVEL_FIVE_STANDARD_CHECKPOINT_PROFILE
+                if self.level_number == 5
+                else STANDARD_CHECKPOINT_PROFILE
+            )
+            checkpoint = Checkpoint(
+                uid, x + .5, y + .5, terrain_kind, faction, faction, profile
+            )
+            checkpoints.append(checkpoint)
+            occupied.append((checkpoint.x, checkpoint.y))
+        if self.level_number == 5:
+            factions = rng.sample(("demon", "frost_giant"), 2)
+            edge_depth = round(MAP_SIZE * .20)
+            edge_margin = math.ceil(LARGE_CHECKPOINT_PROFILE.defender_leash)
+            edge_bands = (
+                range(edge_margin, edge_depth),
+                range(MAP_SIZE - edge_depth, MAP_SIZE - edge_margin),
+            )
+            for faction, y_band in zip(factions, edge_bands):
+                candidates = []
+                for y in y_band:
+                    for x in range(12, MAP_SIZE - 12):
+                        cell = terrain[(x, y)]
+                        position = (x + .5, y + .5)
+                        if (
+                            cell.kind == "path"
+                            or (x, y) in road_cells
+                            or (x, y) in self._terrain_protected_cells
+                            or dist(position, GREEN_KING_POSITION) < 24
+                            or dist(position, RED_KING_POSITION) < 24
+                            or any(dist(position, previous) < 24 for previous in occupied)
+                        ):
+                            continue
+                        nearest_road = min(
+                            (abs(x - rx) + abs(y - ry) for rx, ry in road_cells),
+                            default=MAP_SIZE,
+                        )
+                        candidates.append((nearest_road, rng.random(), x, y))
+                if not candidates:
+                    raise RuntimeError(
+                        f"Unable to place Level 5 {faction} edge hold"
+                    )
+                _, _, x, y = min(candidates, key=lambda entry: (entry[0], entry[1]))
+                checkpoint = Checkpoint(
+                    len(checkpoints) + 1,
+                    x + .5,
+                    y + .5,
+                    terrain[(x, y)].kind,
+                    faction,
+                    faction,
+                    LARGE_CHECKPOINT_PROFILE,
+                    spawn_timer=LARGE_CHECKPOINT_PROFILE.spawn_seconds,
+                )
+                checkpoints.append(checkpoint)
+                occupied.append((checkpoint.x, checkpoint.y))
+        return checkpoints
+
+    def _make_checkpoint_road_spur(self, checkpoint, terrain):
+        """Connect the nearest road to a cell beside a checkpoint."""
+        road_cells = {
+            cell for route in self._terrain_road_routes for cell in route
+        }
+        cx, cy = checkpoint.cell
+        adjacent = [
+            (cx + dx, cy + dy)
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1))
+            if 0 <= cx + dx < MAP_SIZE and 0 <= cy + dy < MAP_SIZE
+        ]
+        end, start = min(
+            ((end, start) for end in adjacent for start in road_cells),
+            key=lambda pair: (
+                abs(pair[0][0] - pair[1][0]) + abs(pair[0][1] - pair[1][1]),
+                pair[0], pair[1],
+            ),
+        )
+        x, y = start
+        route = [(x, y)]
+        while (x, y) != end:
+            if x != end[0]:
+                x += 1 if end[0] > x else -1
+            elif y != end[1]:
+                y += 1 if end[1] > y else -1
+            route.append((x, y))
+        return route
 
     def _make_road_routes(self, rng):
         """Return a connected main road and one or two split/rejoin branches."""
@@ -2802,6 +4506,437 @@ class Game:
         self.units.append(unit)
         return unit
 
+    @staticmethod
+    def teams_hostile(first, second):
+        if first == second:
+            return False
+        if first in NATIVE_FACTIONS and second in NATIVE_FACTIONS:
+            return True
+        if first in NATIVE_FACTIONS or second in NATIVE_FACTIONS:
+            return bool({first, second} & {"green", "red"})
+        return {first, second} == {"green", "red"}
+
+    def spawn_checkpoint_defender(self, checkpoint, initial_index=None):
+        living = [
+            unit for unit in self.units
+            if unit.uid in checkpoint.defender_uids and unit.health > 0
+        ]
+        if (
+            checkpoint.owner != checkpoint.native_faction
+            or len(living) >= checkpoint.profile.max_defenders
+        ):
+            return None
+        melee, ranged = CHECKPOINT_UNITS[checkpoint.native_faction]
+        if initial_index is not None:
+            kind = (
+                melee
+                if initial_index < checkpoint.profile.initial_melee
+                else ranged
+            )
+        else:
+            initial_count = (
+                checkpoint.profile.initial_melee
+                + checkpoint.profile.initial_ranged
+            )
+            kind = (
+                ranged
+                if (checkpoint.spawn_count - initial_count) % 2 == 0
+                else melee
+            )
+        slot = checkpoint.spawn_count
+        angle = (slot * 2.399963229728653) % math.tau
+        radius = (
+            2.0 + (slot % 3) * .65
+            if not checkpoint.profile.opposite_large_target
+            else 3.0 + math.sqrt(slot) * .8
+        )
+        position = clamp_to_map((
+            checkpoint.x + math.cos(angle) * radius,
+            checkpoint.y + math.sin(angle) * radius,
+        ))
+        unit = self.add_unit(kind, checkpoint.native_faction, *position)
+        unit.home_position = position
+        unit.checkpoint_uid = checkpoint.uid
+        checkpoint.defender_uids.add(unit.uid)
+        checkpoint.spawn_count += 1
+        return unit
+
+    def spawn_captured_checkpoint_unit(self, checkpoint):
+        """Raise one native-faction troop for a Verdant or Crimson owner."""
+        if checkpoint.owner not in ("green", "red"):
+            return None
+        team_units = checkpoint.captured_unit_uids[checkpoint.owner]
+        living_uids = {
+            unit.uid for unit in self.units
+            if unit.uid in team_units and unit.health > 0
+        }
+        team_units.intersection_update(living_uids)
+        if len(team_units) >= CAPTURED_CHECKPOINT_MAX_UNITS:
+            return None
+
+        melee, ranged = CHECKPOINT_UNITS[checkpoint.native_faction]
+        kind = ranged if checkpoint.captured_spawn_count % 2 == 0 else melee
+        slot = checkpoint.captured_spawn_count
+        angle = (slot * 2.399963229728653) % math.tau
+        radius = 2.0 + (slot % 3) * .65
+        position = clamp_to_map((
+            checkpoint.x + math.cos(angle) * radius,
+            checkpoint.y + math.sin(angle) * radius,
+        ))
+        unit = self.add_unit(kind, checkpoint.owner, *position)
+        unit.home_position = position
+        unit.checkpoint_uid = checkpoint.uid
+        team_units.add(unit.uid)
+        checkpoint.captured_spawn_count += 1
+        return unit
+
+    def native_raid_objective(self, checkpoint):
+        """Choose the nearest other native hold or living king."""
+        origin = (checkpoint.x, checkpoint.y)
+        candidates = []
+        if checkpoint.profile.opposite_large_target:
+            opposite = next((
+                other for other in self.checkpoints
+                if other is not checkpoint
+                and other.profile.opposite_large_target
+                and other.owner == other.native_faction
+                and other.owner != checkpoint.owner
+            ), None)
+            if opposite is not None:
+                return (
+                    dist(origin, (opposite.x, opposite.y)),
+                    0,
+                    opposite.uid,
+                    "checkpoint",
+                    opposite,
+                )
+        else:
+            candidates = [
+            (
+                dist(origin, (other.x, other.y)),
+                0,
+                other.uid,
+                "checkpoint",
+                other,
+            )
+            for other in self.checkpoints
+            if (
+                other is not checkpoint
+                and other.owner == other.native_faction
+                and other.owner != checkpoint.owner
+            )
+            ]
+        for team_index, team in enumerate(("green", "red")):
+            king = self.team_king(team)
+            if king is not None:
+                candidates.append((
+                    dist(origin, (king.x, king.y)),
+                    1,
+                    team_index,
+                    "king",
+                    king,
+                ))
+        return min(candidates, default=None)
+
+    def launch_native_raid(self, checkpoint):
+        """Detach a profile-sized force at its threshold and choose an objective."""
+        if checkpoint.owner != checkpoint.native_faction:
+            return []
+        active_raid = any(
+            unit.health > 0
+            and unit.team == checkpoint.owner
+            and unit.checkpoint_uid == checkpoint.uid
+            and (
+                unit.raid_target_checkpoint_uid is not None
+                or unit.raid_target_king_team is not None
+            )
+            for unit in self.units
+        )
+        if active_raid:
+            return []
+        living = sorted(
+            (
+                unit for unit in self.units
+                if unit.uid in checkpoint.defender_uids and unit.health > 0
+            ),
+            key=lambda unit: unit.uid,
+        )
+        if len(living) < checkpoint.profile.raid_threshold:
+            return []
+        objective = self.native_raid_objective(checkpoint)
+        if objective is None:
+            return []
+        _, _, _, objective_kind, target = objective
+        raiders = living[:checkpoint.profile.raid_size]
+        for unit in raiders:
+            checkpoint.defender_uids.discard(unit.uid)
+            unit.home_position = None
+            if objective_kind == "checkpoint":
+                unit.raid_target_checkpoint_uid = target.uid
+                unit.raid_target_king_team = None
+                unit.target_pos = (target.x, target.y)
+            else:
+                unit.raid_target_checkpoint_uid = None
+                unit.raid_target_king_team = target.team
+                unit.target_pos = (target.x, target.y)
+            self.clear_navigation(unit)
+        return raiders
+
+    def garrison_native_raiders(self, checkpoint, faction):
+        """Turn a successful native raid into the captured hold's garrison."""
+        raiders = [
+            unit for unit in self.units
+            if unit.health > 0
+            and unit.team == faction
+            and unit.raid_target_checkpoint_uid == checkpoint.uid
+            and dist((unit.x, unit.y), (checkpoint.x, checkpoint.y))
+            <= checkpoint.profile.capture_radius
+        ]
+        for unit in raiders:
+            source = self.checkpoint_by_uid(unit.checkpoint_uid)
+            if source is not None:
+                source.defender_uids.discard(unit.uid)
+            unit.checkpoint_uid = checkpoint.uid
+            unit.raid_target_checkpoint_uid = None
+            unit.raid_target_king_team = None
+            unit.home_position = (unit.x, unit.y)
+            unit.target = None
+            unit.target_pos = None
+            checkpoint.defender_uids.add(unit.uid)
+            self.clear_navigation(unit)
+        return raiders
+
+    def checkpoint_by_uid(self, uid):
+        return next((checkpoint for checkpoint in self.checkpoints if checkpoint.uid == uid), None)
+
+    def checkpoint_income(self, team):
+        return sum(
+            checkpoint.profile.income
+            for checkpoint in self.checkpoints
+            if checkpoint.owner == team and checkpoint.income_active
+        )
+
+    def income_rate(self, team):
+        base = self.level.player_income if team == "green" else self.level.enemy_income
+        return base + self.checkpoint_income(team)
+
+    def update_checkpoints(self, dt):
+        for checkpoint in self.checkpoints:
+            previous_under_attack = checkpoint.under_attack
+            previous_capturing_team = checkpoint.capturing_team
+            ownership_changed = False
+            checkpoint.defender_uids = {
+                uid for uid in checkpoint.defender_uids
+                if any(unit.uid == uid and unit.health > 0 for unit in self.units)
+            }
+            for team, unit_uids in checkpoint.captured_unit_uids.items():
+                checkpoint.captured_unit_uids[team] = {
+                    uid for uid in unit_uids
+                    if any(
+                        unit.uid == uid and unit.team == team and unit.health > 0
+                        for unit in self.units
+                    )
+                }
+            if checkpoint.owner in NATIVE_FACTIONS:
+                # A second friendly raid may still be en route when the first
+                # one completes the capture. Fold it into the new garrison
+                # instead of leaving its source permanently marked as raiding.
+                self.garrison_native_raiders(checkpoint, checkpoint.owner)
+            self.launch_native_raid(checkpoint)
+            if (
+                checkpoint.owner == checkpoint.native_faction
+                and not checkpoint.ever_captured
+            ):
+                checkpoint.spawn_timer -= max(0.0, dt)
+                while checkpoint.spawn_timer <= 0:
+                    self.spawn_checkpoint_defender(checkpoint)
+                    self.launch_native_raid(checkpoint)
+                    checkpoint.spawn_timer += checkpoint.profile.spawn_seconds
+            elif checkpoint.owner in ("green", "red"):
+                checkpoint.captured_spawn_timer -= max(0.0, dt)
+                while checkpoint.captured_spawn_timer <= 1e-9:
+                    self.spawn_captured_checkpoint_unit(checkpoint)
+                    checkpoint.captured_spawn_timer += (
+                        CAPTURED_CHECKPOINT_SPAWN_SECONDS
+                    )
+            present = {
+                team for team in ("green", "red", *NATIVE_FACTIONS)
+                if any(
+                    unit.team == team
+                    and (
+                        unit.is_purchasable_army_unit
+                        or (
+                            unit.is_native_defender
+                            and unit.raid_target_checkpoint_uid == checkpoint.uid
+                        )
+                    )
+                    and unit.health > 0
+                    and dist((unit.x, unit.y), (checkpoint.x, checkpoint.y))
+                    <= checkpoint.profile.capture_radius
+                    for unit in self.units
+                )
+            }
+            hostile_teams = {
+                team for team in present
+                if self.teams_hostile(checkpoint.owner, team)
+            }
+            checkpoint.under_attack = bool(hostile_teams)
+            checkpoint.contested = len(present) > 1
+            if checkpoint.owner in NATIVE_FACTIONS and checkpoint.defender_uids:
+                checkpoint.capturing_team = None
+                checkpoint.capture_progress = 0.0
+            else:
+                attackers = present - {checkpoint.owner}
+                if len(present) == 1 and len(attackers) == 1:
+                    capturing_team = next(iter(attackers))
+                    if checkpoint.capturing_team != capturing_team:
+                        checkpoint.capturing_team = capturing_team
+                        checkpoint.capture_progress = 0.0
+                    checkpoint.capture_progress += max(0.0, dt)
+                    if (
+                        checkpoint.capture_progress + 1e-9
+                        >= CHECKPOINT_CAPTURE_SECONDS
+                    ):
+                        previous_owner = checkpoint.owner
+                        checkpoint.owner = capturing_team
+                        ownership_changed = True
+                        checkpoint.ever_captured = capturing_team in ("green", "red")
+                        if capturing_team in NATIVE_FACTIONS:
+                            checkpoint.native_faction = capturing_team
+                            checkpoint.spawn_timer = checkpoint.profile.spawn_seconds
+                            self.garrison_native_raiders(
+                                checkpoint, capturing_team
+                            )
+                        else:
+                            checkpoint.captured_spawn_timer = (
+                                CAPTURED_CHECKPOINT_SPAWN_SECONDS
+                            )
+                        checkpoint.capturing_team = None
+                        checkpoint.capture_progress = 0.0
+                        checkpoint.under_attack = False
+                        checkpoint.contested = False
+                        if capturing_team == "green":
+                            self.message = (
+                                f"{checkpoint.native_faction.replace('_', ' ').title()} hold captured"
+                                " — income and healing active"
+                            )
+                        elif capturing_team == "red" and previous_owner == "green":
+                            self.message = (
+                                f"{checkpoint.native_faction.replace('_', ' ').title()} hold lost"
+                            )
+                        elif capturing_team in NATIVE_FACTIONS:
+                            faction = capturing_team.replace("_", " ").title()
+                            self.message = f"{faction} raid captured the hold"
+                        else:
+                            self.message = (
+                                f"Crimson army captured the "
+                                f"{checkpoint.native_faction.replace('_', ' ').title()} hold"
+                            )
+                        self.message_time = 3.0
+                else:
+                    checkpoint.capturing_team = None
+                    checkpoint.capture_progress = 0.0
+            if (
+                checkpoint.owner in ("green", "red")
+                and checkpoint.income_active
+            ):
+                for unit in self.units:
+                    if (
+                        unit.team == checkpoint.owner
+                        and unit.is_purchasable_army_unit
+                        and unit.health > 0
+                        and unit.health < unit.max_health
+                        and dist((unit.x, unit.y), (checkpoint.x, checkpoint.y))
+                        <= checkpoint.profile.heal_radius
+                    ):
+                        unit.health = min(
+                            unit.max_health,
+                            unit.health + CHECKPOINT_HEAL_RATE * max(0.0, dt),
+                        )
+            if (
+                not ownership_changed
+                and
+                checkpoint.owner in ("green", "red")
+                and checkpoint.under_attack != previous_under_attack
+            ):
+                if checkpoint.under_attack:
+                    self.message = (
+                        f"{checkpoint.native_faction.replace('_', ' ').title()} hold contested"
+                        " — income and healing suppressed"
+                    )
+                else:
+                    self.message = (
+                        f"{checkpoint.native_faction.replace('_', ' ').title()} hold secure"
+                        " — income and healing restored"
+                    )
+                self.message_time = 2.8
+            elif (
+                checkpoint.capturing_team is not None
+                and checkpoint.capturing_team != previous_capturing_team
+            ):
+                faction = {
+                    "green": "Verdant",
+                    "red": "Crimson",
+                    **{
+                        native: native.replace("_", " ").title()
+                        for native in NATIVE_FACTIONS
+                    },
+                }[checkpoint.capturing_team]
+                force = (
+                    "raid"
+                    if checkpoint.capturing_team in NATIVE_FACTIONS
+                    else "army"
+                )
+                self.message = (
+                    f"{faction} {force} capturing the "
+                    f"{checkpoint.native_faction.replace('_', ' ').title()} hold"
+                )
+                self.message_time = 2.5
+
+    def native_defender_target(self, unit):
+        checkpoint = self.checkpoint_by_uid(unit.checkpoint_uid)
+        if checkpoint is None:
+            return None
+        if unit.raid_target_checkpoint_uid is not None or unit.raid_target_king_team:
+            candidates = [
+                other for other in self.units
+                if (
+                    other.health > 0
+                    and self.teams_hostile(unit.team, other.team)
+                    and dist((other.x, other.y), (unit.x, unit.y))
+                    <= UNIT_VISION_RADIUS
+                )
+            ]
+            return min(
+                candidates,
+                key=lambda other: (
+                    dist((unit.x, unit.y), (other.x, other.y)), other.uid
+                ),
+                default=None,
+            )
+        candidates = [
+            other for other in self.units
+            if other.health > 0 and self.teams_hostile(unit.team, other.team)
+            and dist((other.x, other.y), (checkpoint.x, checkpoint.y))
+            <= checkpoint.profile.defender_leash
+        ]
+        return min(
+            candidates,
+            key=lambda other: (dist((unit.x, unit.y), (other.x, other.y)), other.uid),
+            default=None,
+        )
+
+    def native_raid_destination(self, unit):
+        if unit.raid_target_checkpoint_uid is not None:
+            checkpoint = self.checkpoint_by_uid(unit.raid_target_checkpoint_uid)
+            if checkpoint is not None:
+                return checkpoint.x, checkpoint.y
+        if unit.raid_target_king_team:
+            king = self.team_king(unit.raid_target_king_team)
+            if king is not None:
+                return king.x, king.y
+        return None
+
     def world_to_screen(self, x, y):
         w, h = self.screen.get_size()
         return (w / 2 + (x - self.camera[0]) * self.zoom,
@@ -2867,7 +5002,7 @@ class Game:
             nearby_enemies = [
                 unit for unit in self.units
                 if (
-                    unit.team != team
+                    self.teams_hostile(unit.team, team)
                     and unit.health > 0
                     and self.currently_visible_enemy(unit)
                     and dist((recruit.x, recruit.y), (unit.x, unit.y))
@@ -2898,25 +5033,42 @@ class Game:
         selected = [u for u in self.units if u.selected and u.is_player_commandable]
         if not selected:
             return
-        visible_enemies = [u for u in self.units if u.team == "red" and self.is_visible(u.x, u.y)]
+        visible_enemies = [
+            u for u in self.units
+            if (
+                self.teams_hostile("green", u.team)
+                and u.health > 0
+                and self.is_visible(u.x, u.y)
+            )
+        ]
         candidates = visible_enemies
         clicked = min(candidates, key=lambda e: dist((e.x, e.y), world), default=None)
+        cols = math.ceil(math.sqrt(len(selected)))
+        formation_destinations = [
+            clamp_to_map((
+                world[0] + (i % cols - (cols - 1) / 2) * 1.15,
+                world[1] + (i // cols) * 1.15,
+            ))
+            for i in range(len(selected))
+        ]
         if clicked and dist((clicked.x, clicked.y), world) < 1.5:
-            for u in selected:
+            for u, formation_destination in zip(
+                selected, formation_destinations
+            ):
                 self.clear_navigation(u)
                 u.target, u.target_pos = clicked, (clicked.x, clicked.y)
-                u.order_pos = None
+                # A target can die or disappear while a large group is still
+                # crossing the map. Retain the clicked formation as the
+                # strategic destination so that losing the target resumes the
+                # order instead of stopping and leaving the group scattered.
+                u.order_pos = formation_destination
                 u.target_auto_acquired = False
             return
-        cols = math.ceil(math.sqrt(len(selected)))
-        for i, u in enumerate(selected):
-            offset = ((i % cols - (cols - 1) / 2) * 1.15, (i // cols) * 1.15)
+        for u, formation_destination in zip(selected, formation_destinations):
             self.clear_navigation(u)
             u.target = None
             u.target_auto_acquired = False
-            u.order_pos = clamp_to_map(
-                (world[0] + offset[0], world[1] + offset[1])
-            )
+            u.order_pos = formation_destination
             u.target_pos = u.order_pos
 
     @staticmethod
@@ -2947,6 +5099,14 @@ class Game:
 
     def is_visible(self, x, y):
         return (int(x), int(y)) in self.visible
+
+    def is_display_visible(self, x, y):
+        """Return whether the player UI should render this world position."""
+        return not self.fog_of_war_enabled or self.is_visible(x, y)
+
+    def toggle_fog_of_war(self):
+        """Toggle only the player's fog overlay and hidden-object rendering."""
+        self.fog_of_war_enabled = not self.fog_of_war_enabled
 
     def is_team_visible(self, team, x, y):
         """Return current shared terrain visibility for either combat team."""
@@ -3048,12 +5208,39 @@ class Game:
                     if team == "red" else UNIT_VISION_RADIUS,
                 )
                 for unit in self.units
-                if unit.team == team and unit.is_purchasable_army_unit
+                if unit.team == team and unit.kind in COMBAT_UNIT_KINDS
                 and unit.health > 0
             ]
             cells = set()
             for sx, sy, sight_budget in sources:
                 cells.update(self._vision_mask((sx, sy), sight_budget))
+            if self.level.has_checkpoints:
+                for owned_checkpoint in self.checkpoints:
+                    if owned_checkpoint.owner != team:
+                        continue
+                    cx, cy = owned_checkpoint.cell
+                    radius = int(math.ceil(owned_checkpoint.profile.vision_radius))
+                    cells.update(
+                        (x, y)
+                        for x in range(max(0, cx - radius), min(MAP_SIZE, cx + radius + 1))
+                        for y in range(max(0, cy - radius), min(MAP_SIZE, cy + radius + 1))
+                        if (x - cx) ** 2 + (y - cy) ** 2
+                        <= owned_checkpoint.profile.vision_radius ** 2
+                    )
+            if team == "red" and self.level.has_checkpoints:
+                checkpoint = self.checkpoint_by_uid(
+                    self.enemy_ai.checkpoint_target_uid
+                )
+                if checkpoint is not None and self.enemy_ai.state == AIState.ATTACKING:
+                    cx, cy = checkpoint.cell
+                    radius = int(math.ceil(checkpoint.profile.defender_leash))
+                    cells.update(
+                        (x, y)
+                        for x in range(max(0, cx - radius), min(MAP_SIZE, cx + radius + 1))
+                        for y in range(max(0, cy - radius), min(MAP_SIZE, cy + radius + 1))
+                        if (x - cx) ** 2 + (y - cy) ** 2
+                        <= checkpoint.profile.defender_leash ** 2
+                    )
         if team == "green":
             self.visible = cells
         else:
@@ -3067,6 +5254,9 @@ class Game:
         self._refresh_vision_terrain_signature()
         self.update_team_visibility("green", refresh_terrain=False)
         self.update_team_visibility("red", refresh_terrain=False)
+        for checkpoint in self.checkpoints:
+            if checkpoint.cell in self.visible:
+                checkpoint.discovered = True
         self.explored.update(self.visible)
         if self.visible != previous_visible or len(self.explored) != previous_explored_count:
             self._fog_revision += 1
@@ -3078,7 +5268,7 @@ class Game:
             self.rebuild_unit_spatial_hash()
         opponents = [
             candidate for candidate in self.nearby_units(unit, search_radius)
-            if candidate.team != unit.team and candidate.health > 0
+            if self.teams_hostile(unit.team, candidate.team) and candidate.health > 0
             and self.is_team_visible(unit.team, candidate.x, candidate.y)
         ]
         in_range = [
@@ -3127,7 +5317,7 @@ class Game:
     def is_valid_guard_target(self, guard, target):
         if (
             target is None
-            or target.team == guard.team
+            or not self.teams_hostile(guard.team, target.team)
             or target.health <= 0
         ):
             return False
@@ -3136,6 +5326,31 @@ class Game:
             dist(home, (target.x, target.y))
             <= self.special_unit_engagement_radius(guard)
         )
+
+    @staticmethod
+    def apply_movement_slow(unit, multiplier, duration):
+        """Apply or refresh the strongest active non-stacking movement slow."""
+        if unit.health <= 0:
+            return
+        if unit.slow_timer <= 0:
+            unit.slow_multiplier = multiplier
+        else:
+            unit.slow_multiplier = min(unit.slow_multiplier, multiplier)
+        unit.slow_timer = max(unit.slow_timer, duration)
+
+    def native_splash_targets(self, attacker, primary, radius):
+        """Return at most three deterministic secondary impact targets."""
+        return sorted(
+            (
+                unit for unit in self.units
+                if unit is not primary and unit.health > 0
+                and self.teams_hostile(attacker.team, unit.team)
+                and dist((unit.x, unit.y), (primary.x, primary.y)) <= radius
+            ),
+            key=lambda unit: (
+                dist((unit.x, unit.y), (primary.x, primary.y)), unit.uid
+            ),
+        )[:NATIVE_SPLASH_TARGET_LIMIT]
 
     def guard_chase_destination(self, guard, target):
         """Clamp a pursuit point to the guard's leash circle."""
@@ -3159,24 +5374,81 @@ class Game:
         ):
             return
         damage = attacker.damage
-        if attacker.kind == "archer":
+        if (
+            attacker.kind == "orc_spear_thrower"
+            and attacker.health < attacker.max_health * .5
+        ):
+            damage *= 1.35
+        if attacker.is_ranged:
             arrow_multiplier = {
                 "shield": ARCHER_DAMAGE_VS_SHIELD_MULTIPLIER,
                 "king": ARCHER_DAMAGE_VS_KING_MULTIPLIER,
                 "knight": ARCHER_DAMAGE_VS_KNIGHT_MULTIPLIER,
-            }.get(getattr(target, "kind", None), 1.0)
+            }.get(getattr(target, "kind", None), 1.0) if attacker.kind == "archer" else 1.0
             damage *= arrow_multiplier
             attacker_terrain = self.terrain_kind_at((attacker.x, attacker.y))
             target_terrain = self.terrain_kind_at((target.x, target.y))
-            if attacker_terrain == "mountain" and target_terrain != "mountain":
+            if attacker.kind == "archer" and attacker_terrain == "mountain" and target_terrain != "mountain":
                 damage *= 1.2
             damage *= TERRAIN_METADATA[target_terrain][
                 "ranged_damage_taken_multiplier"
             ]
         target_terrain = self.terrain_kind_at((target.x, target.y))
         damage *= TERRAIN_METADATA[target_terrain]["damage_taken_multiplier"]
+        if target.kind == "dwarf_guard" and attacker.is_ranged:
+            damage *= .70
+        if target.kind == "dwarf_arbalist" and target.braced:
+            damage *= .75
+        target_health_before = target.health
         target.health -= damage
         target.flash = .12
+        if attacker.kind == "demon_reaver":
+            damage_dealt = min(target_health_before, max(0.0, damage))
+            attacker.health = min(
+                attacker.max_health,
+                attacker.health + damage_dealt * DEMON_LIFESTEAL_RATIO,
+            )
+        if attacker.kind == "frost_colossus":
+            self.apply_movement_slow(
+                target, FROST_COLOSSUS_SLOW_MULTIPLIER, FROST_SLOW_SECONDS
+            )
+        if attacker.kind in ("infernal_warlock", "ice_hurler"):
+            splash_radius = (
+                WARLOCK_SPLASH_RADIUS
+                if attacker.kind == "infernal_warlock"
+                else ICE_HURLER_SPLASH_RADIUS
+            )
+            for splash_target in self.native_splash_targets(
+                attacker, target, splash_radius
+            ):
+                splash_target.health -= damage * NATIVE_SPLASH_DAMAGE_RATIO
+                splash_target.flash = .12
+                if attacker.kind == "ice_hurler":
+                    self.apply_movement_slow(
+                        splash_target,
+                        ICE_HURLER_SLOW_MULTIPLIER,
+                        FROST_SLOW_SECONDS,
+                    )
+            if attacker.kind == "ice_hurler":
+                self.apply_movement_slow(
+                    target, ICE_HURLER_SLOW_MULTIPLIER, FROST_SLOW_SECONDS
+                )
+        if attacker.kind == "orc_cleaver":
+            splash_target = min(
+                (
+                    unit for unit in self.units
+                    if unit is not target and unit.health > 0
+                    and self.teams_hostile(attacker.team, unit.team)
+                    and dist((unit.x, unit.y), (target.x, target.y)) <= 1.25
+                ),
+                key=lambda unit: (
+                    dist((unit.x, unit.y), (target.x, target.y)), unit.uid
+                ),
+                default=None,
+            )
+            if splash_target is not None:
+                splash_target.health -= damage * .5
+                splash_target.flash = .12
         if (
             target.is_king_objective
             and target.health > 0
@@ -3185,7 +5457,7 @@ class Game:
         ):
             self.begin_king_recovery(target)
         attacker.attack_timer = attacker.cooldown
-        if attacker.kind == "archer":
+        if attacker.is_ranged:
             attacker.movement_lock_timer = attacker.cooldown
             self.arrows.append([attacker.x, attacker.y, target.x, target.y, .22, attacker.team])
         elif attacker.kind == "king":
@@ -3262,12 +5534,15 @@ class Game:
             # repeatedly charging time to the tile just left.
             sample_x = unit.x + direction_x * 1e-9
             sample_y = unit.y + direction_y * 1e-9
-            _, multiplier = self.terrain_cell_and_speed_multiplier(
+            terrain_cell, multiplier = self.terrain_cell_and_speed_multiplier(
                 (sample_x, sample_y)
             )
+            if unit.kind == "elf_bladedancer" and terrain_cell.kind == "forest":
+                multiplier = 1.0
+            movement_speed = unit.speed * unit.slow_multiplier
             effective_speed = min(
                 base_speed * multiplier,
-                unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
+                movement_speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
             )
             if effective_speed <= 1e-12:
                 break
@@ -3315,13 +5590,14 @@ class Game:
         """
         dx, dy = destination[0] - unit.x, destination[1] - unit.y
         distance = math.hypot(dx, dy)
+        movement_speed = unit.speed * unit.slow_multiplier
         preferred_x = preferred_y = 0.0
         if distance >= .08:
-            preferred_x = dx / distance * unit.speed
-            preferred_y = dy / distance * unit.speed
+            preferred_x = dx / distance * movement_speed
+            preferred_y = dy / distance * movement_speed
 
         preferred_step = min(
-            distance, unit.speed * max(0.0, dt)
+            distance, movement_speed * max(0.0, dt)
         ) if distance >= .08 else 0.0
         predicted_position = (
             unit.x + dx / distance * preferred_step,
@@ -3352,11 +5628,11 @@ class Game:
             separation_speed = min(
                 max(
                     separation_amount * UNIT_SEPARATION_GAIN,
-                    unit.speed
+                    movement_speed
                     * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER
                     * overlap_response,
                 ),
-                unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
+                movement_speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER,
             )
             separation_x = separation_x / separation_amount * separation_speed
             separation_y = separation_y / separation_amount * separation_speed
@@ -3366,7 +5642,7 @@ class Game:
         velocity = math.hypot(velocity_x, velocity_y)
         if velocity <= 1e-12 or dt <= 0:
             return False
-        max_speed = unit.speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER
+        max_speed = movement_speed * UNIT_MAX_SEPARATION_SPEED_MULTIPLIER
         if velocity > max_speed:
             velocity_x *= max_speed / velocity
             velocity_y *= max_speed / velocity
@@ -3387,6 +5663,9 @@ class Game:
                 unit.x, unit.y = clamp_to_map((unit.x, unit.y))
         moved = dist(before, (unit.x, unit.y)) > 1e-9
         unit.moved_this_update |= moved
+        if moved and unit.kind == "dwarf_arbalist":
+            unit.stationary_time = 0.0
+            unit.braced = False
         return moved
 
     @staticmethod
@@ -3825,7 +6104,23 @@ class Game:
         return moved
 
     def update_unit(self, u, dt):
+        moved_last_update = u.moved_this_update
         u.moved_this_update = False
+        if u.slow_timer <= dt + 1e-9:
+            u.slow_timer = 0.0
+            u.slow_multiplier = 1.0
+        else:
+            u.slow_timer -= max(0.0, dt)
+        if u.kind == "dwarf_arbalist":
+            if moved_last_update:
+                u.stationary_time = 0.0
+                u.braced = False
+            else:
+                u.stationary_time += max(0.0, dt)
+                u.braced = (
+                    u.stationary_time + 1e-9
+                    >= DWARF_ARBALIST_BRACE_SECONDS
+                )
         if u.health <= 0:
             u.selected = False
             u.target = None
@@ -3833,6 +6128,8 @@ class Game:
             u.order_pos = None
             u.target_auto_acquired = False
             u.tactical_pos = None
+            u.slow_timer = 0.0
+            u.slow_multiplier = 1.0
             self.clear_navigation(u)
             return
         if u.is_king_objective or u.is_autonomous_guard:
@@ -3856,7 +6153,7 @@ class Game:
                 if u.health >= u.max_health:
                     u.king_recovering = False
                     u.king_recovery_home_reached = False
-        elif not (u.is_player_commandable or u.is_enemy_ai_commandable):
+        elif not (u.is_player_commandable or u.is_enemy_ai_commandable or u.is_native_defender):
             u.selected = False
             u.target = None
             u.target_pos = None
@@ -3866,15 +6163,14 @@ class Game:
         else:
             u.movement_lock_timer -= dt
         u.flash = max(0, u.flash - dt)
-        movement_locked = u.kind == "archer" and u.movement_lock_timer > 0
+        movement_locked = u.is_ranged and u.movement_lock_timer > 0
         target = u.target
         if target is not None and getattr(target, "health", 0) <= 0:
             dead_target_position = (target.x, target.y)
-            was_auto = u.target_auto_acquired
             self.release_combat_target(u)
             target = None
             if (
-                not (was_auto and u.order_pos is not None)
+                u.order_pos is None
                 and
                 u.target_pos is not None
                 and dist(u.target_pos, dead_target_position) <= .35
@@ -3934,6 +6230,75 @@ class Game:
             u.target_pos = self.guard_chase_destination(u, target)
             self.navigate_unit_toward(u, u.target_pos, dt, target)
             return
+        if u.is_native_defender:
+            checkpoint = self.checkpoint_by_uid(u.checkpoint_uid)
+            raid_destination = self.native_raid_destination(u)
+            is_raider = (
+                u.raid_target_checkpoint_uid is not None
+                or u.raid_target_king_team is not None
+            )
+            target = self.native_defender_target(u)
+            u.target = target
+            if checkpoint is None:
+                u.target_pos = None
+                return
+            if target is None:
+                home = (
+                    raid_destination
+                    if is_raider and raid_destination is not None
+                    else u.home_position or (checkpoint.x, checkpoint.y)
+                )
+                if dist((u.x, u.y), home) <= .08:
+                    u.x, u.y = home
+                    u.target_pos = None
+                    self.clear_navigation(u)
+                else:
+                    u.target_pos = home
+                    self.navigate_unit_toward(u, home, dt)
+                return
+            distance = dist((u.x, u.y), (target.x, target.y))
+            if u.kind == "elf_ranger":
+                dx, dy = u.x - target.x, u.y - target.y
+                if distance <= 1e-9:
+                    dx, dy, distance = 1.0, 0.0, 1.0
+                desired = (
+                    target.x + dx / distance * ELF_RANGER_PREFERRED_RANGE,
+                    target.y + dy / distance * ELF_RANGER_PREFERRED_RANGE,
+                )
+                leash_center = raid_destination or (checkpoint.x, checkpoint.y)
+                leash_dx = desired[0] - leash_center[0]
+                leash_dy = desired[1] - leash_center[1]
+                leash_distance = math.hypot(leash_dx, leash_dy)
+                if leash_distance > ELF_RANGER_KITE_LEASH:
+                    desired = (
+                        leash_center[0]
+                        + leash_dx / leash_distance * ELF_RANGER_KITE_LEASH,
+                        leash_center[1]
+                        + leash_dy / leash_distance * ELF_RANGER_KITE_LEASH,
+                    )
+                if (
+                    abs(distance - ELF_RANGER_PREFERRED_RANGE) > .2
+                    and not movement_locked
+                ):
+                    u.target_pos = clamp_to_map(desired)
+                    self.navigate_unit_toward(u, u.target_pos, dt, target)
+                distance = dist((u.x, u.y), (target.x, target.y))
+                if (
+                    distance <= self.effective_attack_range(u)
+                    and u.attack_timer <= 0
+                ):
+                    self.attack(u, target)
+                return
+            if distance <= self.effective_attack_range(u):
+                u.target_pos = None
+                self.clear_navigation(u)
+                if u.attack_timer <= 0 and (not u.is_ranged or not u.moved_this_update):
+                    self.attack(u, target)
+                return
+            u.target_pos = (target.x, target.y)
+            if not movement_locked:
+                self.navigate_unit_toward(u, u.target_pos, dt, target)
+            return
         if u.is_enemy_ai_commandable:
             auto = self.enemy_ai.choose_target(u)
             # Strategic scoring may prefer an opponent that still needs to be
@@ -3982,7 +6347,7 @@ class Game:
                 self.clear_navigation(u)
                 if (
                     u.attack_timer <= 0
-                    and (u.kind != "archer" or not u.moved_this_update)
+                    and (not u.is_ranged or not u.moved_this_update)
                 ):
                     self.attack(u, target)
                 return
@@ -4016,8 +6381,9 @@ class Game:
         self.message_time = max(0, self.message_time - dt)
         self.navigation_time += max(0.0, dt)
         self._path_searches_this_update = 0
-        self.essence += 20 * dt
-        self.enemy_essence += 20 * dt
+        self.update_checkpoints(dt)
+        self.essence += self.income_rate("green") * dt
+        self.enemy_essence += self.income_rate("red") * dt
         if self.level.enemy_ai == "full":
             self.enemy_ai.update(dt)
         elif self.level.enemy_ai == "simple":
@@ -4081,10 +6447,9 @@ class Game:
                 self.enemy_ai.forget_player_unit(unit.uid)
             if unit.target is not None and getattr(unit.target, "health", 0) <= 0:
                 dead_target_position = (unit.target.x, unit.target.y)
-                was_auto = unit.target_auto_acquired
                 self.release_combat_target(unit)
                 if (
-                    not (was_auto and unit.order_pos is not None)
+                    unit.order_pos is None
                     and
                     unit.target_pos is not None
                     and dist(unit.target_pos, dead_target_position) <= .35
@@ -4159,6 +6524,187 @@ class Game:
             max(2, int(self.zoom * .15)),
         )
         self.screen.set_clip(old_clip)
+
+    def draw_checkpoints(self):
+        owner_colors = {
+            "green": GREEN, "red": RED,
+            **NATIVE_FACTION_COLORS,
+        }
+        for checkpoint in self.checkpoints:
+            if not self.is_display_visible(checkpoint.x, checkpoint.y):
+                continue
+            sx, sy = self.world_to_screen(checkpoint.x, checkpoint.y)
+            size = max(
+                18,
+                round(self.zoom * 2.2 * checkpoint.profile.render_scale),
+            )
+            center = (round(sx), round(sy))
+            pygame.draw.circle(self.screen, (39, 34, 28), center, size, max(2, size // 7))
+            pygame.draw.circle(
+                self.screen, owner_colors[checkpoint.owner], center,
+                max(4, size - max(2, size // 7)),
+            )
+            if checkpoint.native_faction == "dwarf":
+                tower = pygame.Rect(0, 0, size * 1.05, size * 1.2)
+                tower.center = center
+                pygame.draw.rect(self.screen, (89, 91, 87), tower)
+                for offset in (-.34, 0, .34):
+                    battlement = pygame.Rect(0, 0, size * .22, size * .25)
+                    battlement.midbottom = (center[0] + size * offset, tower.top + size * .12)
+                    pygame.draw.rect(self.screen, (164, 162, 147), battlement)
+                pygame.draw.rect(
+                    self.screen, (43, 39, 34),
+                    (center[0] - size * .15, center[1], size * .3, size * .55),
+                    border_top_left_radius=max(1, size // 7),
+                    border_top_right_radius=max(1, size // 7),
+                )
+            elif checkpoint.native_faction == "elf":
+                trunk = pygame.Rect(center[0] - size * .12, center[1] - size * .05, size * .24, size * .75)
+                pygame.draw.rect(self.screen, (92, 64, 39), trunk)
+                pygame.draw.circle(self.screen, (34, 96, 54), (center[0], center[1] - size * .2), round(size * .72))
+                pygame.draw.circle(self.screen, (79, 157, 91), (center[0] - size * .2, center[1] - size * .4), round(size * .36))
+            elif checkpoint.native_faction == "orc":
+                pygame.draw.line(
+                    self.screen, (74, 49, 31),
+                    (center[0], center[1] + size * .65),
+                    (center[0], center[1] - size * .65), max(3, size // 5),
+                )
+                pygame.draw.polygon(self.screen, (218, 204, 160), [
+                    (center[0], center[1] - size * .72),
+                    (center[0] - size * .62, center[1] - size * .28),
+                    (center[0] - size * .18, center[1] - size * .08),
+                ])
+                pygame.draw.polygon(self.screen, (218, 204, 160), [
+                    (center[0], center[1] - size * .72),
+                    (center[0] + size * .62, center[1] - size * .28),
+                    (center[0] + size * .18, center[1] - size * .08),
+                ])
+            elif checkpoint.native_faction == "demon":
+                pygame.draw.polygon(self.screen, (55, 25, 24), [
+                    (center[0] - size * .62, center[1] + size * .58),
+                    (center[0] - size * .45, center[1] - size * .36),
+                    (center[0] - size * .18, center[1] - size * .70),
+                    (center[0], center[1] - size * .26),
+                    (center[0] + size * .18, center[1] - size * .70),
+                    (center[0] + size * .45, center[1] - size * .36),
+                    (center[0] + size * .62, center[1] + size * .58),
+                ])
+                pygame.draw.circle(
+                    self.screen, (244, 107, 40), center, round(size * .25)
+                )
+                pygame.draw.circle(
+                    self.screen, (255, 198, 66), center, round(size * .11)
+                )
+            else:  # frost_giant
+                pygame.draw.polygon(self.screen, (183, 229, 242), [
+                    (center[0] - size * .62, center[1] + size * .56),
+                    (center[0] - size * .52, center[1] - size * .18),
+                    (center[0] - size * .28, center[1] - size * .72),
+                    (center[0], center[1] - size * .38),
+                    (center[0] + size * .28, center[1] - size * .72),
+                    (center[0] + size * .52, center[1] - size * .18),
+                    (center[0] + size * .62, center[1] + size * .56),
+                ])
+                pygame.draw.polygon(self.screen, (79, 133, 174), [
+                    (center[0] - size * .22, center[1] + size * .56),
+                    (center[0], center[1] - size * .25),
+                    (center[0] + size * .22, center[1] + size * .56),
+                ])
+            if checkpoint.capturing_team:
+                progress = checkpoint.capture_progress / CHECKPOINT_CAPTURE_SECONDS
+                pygame.draw.arc(
+                    self.screen,
+                    owner_colors[checkpoint.capturing_team],
+                    pygame.Rect(center[0] - size - 4, center[1] - size - 4, (size + 4) * 2, (size + 4) * 2),
+                    -math.pi / 2, -math.pi / 2 + math.tau * progress,
+                    max(2, size // 6),
+                )
+            if 0 <= sx < self.screen.get_width() and 0 <= sy < self.screen.get_height() - HUD_H:
+                owner_name = {
+                    "green": "VERDANT", "red": "CRIMSON",
+                    **NATIVE_FACTION_LABELS,
+                }[checkpoint.owner]
+                if checkpoint.contested:
+                    status = "CONTESTED"
+                elif checkpoint.capturing_team:
+                    amount = round(
+                        checkpoint.capture_progress / CHECKPOINT_CAPTURE_SECONDS * 100
+                    )
+                    status = f"CAPTURING {amount}%"
+                elif checkpoint.owner in ("green", "red"):
+                    income = int(checkpoint.profile.income)
+                    status = (
+                        f"+{income} ACTIVE"
+                        if checkpoint.income_active
+                        else f"+{income} SUPPRESSED"
+                    )
+                else:
+                    status = "NATIVE HOLD"
+                label = self.small.render(
+                    f"{owner_name} • {status}", True, CREAM
+                )
+                label_rect = label.get_rect(
+                    midbottom=(round(sx), round(sy - size - 8))
+                ).inflate(12, 7)
+                pygame.draw.rect(
+                    self.screen, (28, 27, 24), label_rect, border_radius=5
+                )
+                pygame.draw.rect(
+                    self.screen, owner_colors[checkpoint.owner], label_rect,
+                    2, border_radius=5,
+                )
+                self.screen.blit(label, label.get_rect(center=label_rect.center))
+
+    def draw_checkpoint_edge_markers(self):
+        """Point toward discovered holds outside the current battlefield view."""
+        if not self.level.has_checkpoints:
+            return
+        owner_colors = {
+            "green": GREEN, "red": RED,
+            **NATIVE_FACTION_COLORS,
+        }
+        w, h = self.screen.get_size()
+        view = pygame.Rect(18, CHECKPOINT_OBJECTIVE_BAR_HEIGHT + 14, w - 36,
+                           h - HUD_H - CHECKPOINT_OBJECTIVE_BAR_HEIGHT - 30)
+        screen_center = (w / 2, (view.top + view.bottom) / 2)
+        for checkpoint in self.checkpoints:
+            if self.fog_of_war_enabled and not checkpoint.discovered:
+                continue
+            sx, sy = self.world_to_screen(checkpoint.x, checkpoint.y)
+            if view.collidepoint(sx, sy):
+                continue
+            dx, dy = sx - screen_center[0], sy - screen_center[1]
+            if abs(dx) + abs(dy) <= 1e-9:
+                continue
+            scale = min(
+                (view.right - screen_center[0]) / dx if dx > 0 else
+                (view.left - screen_center[0]) / dx if dx < 0 else math.inf,
+                (view.bottom - screen_center[1]) / dy if dy > 0 else
+                (view.top - screen_center[1]) / dy if dy < 0 else math.inf,
+            )
+            marker = (
+                round(screen_center[0] + dx * scale),
+                round(screen_center[1] + dy * scale),
+            )
+            length = math.hypot(dx, dy)
+            ux, uy = dx / length, dy / length
+            px, py = -uy, ux
+            points = [
+                (marker[0] + ux * 10, marker[1] + uy * 10),
+                (marker[0] - ux * 7 + px * 7, marker[1] - uy * 7 + py * 7),
+                (marker[0] - ux * 7 - px * 7, marker[1] - uy * 7 - py * 7),
+            ]
+            pygame.draw.polygon(self.screen, (28, 27, 24), points)
+            pygame.draw.polygon(
+                self.screen, owner_colors[checkpoint.owner], points, 3
+            )
+            initial = self.small.render(
+                checkpoint.native_faction[0].upper(), True, CREAM
+            )
+            initial_rect = initial.get_rect(center=(
+                round(marker[0] - ux * 15), round(marker[1] - uy * 15)
+            ))
+            self.screen.blit(initial, initial_rect)
 
     def terrain_tile_surface(self, kind, variation, size, detailed=None):
         """Return a cached, deterministic primitive tile for one terrain cell."""
@@ -4241,7 +6787,7 @@ class Game:
 
     def draw_unit(self, u, screen_position=None, render_size=None):
         if screen_position is None:
-            if u.team == "red" and not self.is_visible(u.x, u.y):
+            if u.team != "green" and not self.is_display_visible(u.x, u.y):
                 return
             sx, sy = self.world_to_screen(u.x, u.y)
         else:
@@ -4253,7 +6799,15 @@ class Game:
         )
         rect = pygame.Rect(0, 0, size, size)
         rect.center = (round(sx), round(sy))
-        color = GREEN if u.team == "green" else RED
+        color = {
+            "green": GREEN,
+            "red": RED,
+            "dwarf": (126, 113, 85),
+            "elf": (46, 142, 113),
+            "orc": (119, 102, 43),
+            "demon": NATIVE_FACTION_COLORS["demon"],
+            "frost_giant": NATIVE_FACTION_COLORS["frost_giant"],
+        }.get(u.team, RED)
         if u.flash > 0: color = CREAM
         if u.selected:
             pygame.draw.circle(self.screen, GOLD, rect.center, int(size * .68), max(1, size // 9))
@@ -4380,6 +6934,94 @@ class Game:
                 (rect.centerx, rect.bottom - size * .17),
                 max(2, size // 9),
             )
+        elif u.kind == "dwarf_guard":
+            pygame.draw.circle(self.screen, (190, 191, 180), rect.center, round(size * .36))
+            pygame.draw.line(self.screen, (80, 55, 34), (rect.left + size * .25, rect.bottom - size * .18), (rect.right - size * .22, rect.top + size * .18), max(2, size // 8))
+            pygame.draw.polygon(self.screen, (222, 224, 213), [
+                (rect.right - size * .12, rect.top + size * .1),
+                (rect.right - size * .42, rect.top + size * .15),
+                (rect.right - size * .18, rect.top + size * .42),
+            ])
+        elif u.kind == "dwarf_arbalist":
+            pygame.draw.line(self.screen, (79, 52, 30), (rect.left + size * .15, rect.centery), (rect.right - size * .12, rect.centery), max(2, size // 8))
+            pygame.draw.arc(self.screen, (214, 216, 205), rect.inflate(-size * .2, -size * .35), 0, math.pi, max(2, size // 8))
+            pygame.draw.line(self.screen, (234, 226, 194), (rect.centerx, rect.top + size * .2), (rect.centerx, rect.bottom - size * .2), max(1, size // 12))
+        elif u.kind == "elf_bladedancer":
+            pygame.draw.arc(self.screen, (238, 224, 158), rect.inflate(-size * .2, -size * .12), -math.pi * .65, math.pi * .65, max(2, size // 7))
+            pygame.draw.arc(self.screen, (224, 238, 209), rect.inflate(-size * .38, -size * .05), math.pi * .35, math.pi * 1.65, max(2, size // 9))
+        elif u.kind == "elf_ranger":
+            bow = rect.inflate(-size * .35, -size * .08)
+            pygame.draw.arc(self.screen, (206, 170, 79), bow, -math.pi / 2, math.pi / 2, max(2, size // 8))
+            pygame.draw.line(self.screen, CREAM, (bow.centerx, bow.top), (bow.centerx, bow.bottom), max(1, size // 12))
+            pygame.draw.polygon(self.screen, (223, 237, 207), [(rect.right - size * .12, rect.centery), (rect.right - size * .3, rect.centery - size * .1), (rect.right - size * .3, rect.centery + size * .1)])
+        elif u.kind == "orc_cleaver":
+            pygame.draw.line(self.screen, (71, 48, 29), (rect.left + size * .22, rect.bottom - size * .15), (rect.right - size * .3, rect.top + size * .28), max(3, size // 7))
+            pygame.draw.polygon(self.screen, (191, 191, 176), [
+                (rect.right - size * .38, rect.top + size * .12),
+                (rect.right - size * .08, rect.top + size * .2),
+                (rect.right - size * .22, rect.top + size * .5),
+                (rect.right - size * .48, rect.top + size * .4),
+            ])
+        elif u.kind == "orc_spear_thrower":
+            pygame.draw.line(self.screen, (91, 59, 31), (rect.left + size * .16, rect.bottom - size * .16), (rect.right - size * .18, rect.top + size * .18), max(2, size // 9))
+            pygame.draw.polygon(self.screen, (220, 216, 190), [
+                (rect.right - size * .08, rect.top + size * .08),
+                (rect.right - size * .36, rect.top + size * .16),
+                (rect.right - size * .2, rect.top + size * .34),
+            ])
+        elif u.kind == "demon_reaver":
+            pygame.draw.polygon(self.screen, (64, 28, 24), [
+                (rect.left + size * .12, rect.top + size * .28),
+                (rect.left + size * .34, rect.top + size * .08),
+                (rect.centerx, rect.top + size * .34),
+                (rect.right - size * .34, rect.top + size * .08),
+                (rect.right - size * .12, rect.top + size * .28),
+                (rect.right - size * .28, rect.bottom - size * .12),
+                (rect.left + size * .28, rect.bottom - size * .12),
+            ])
+            pygame.draw.line(
+                self.screen, (255, 143, 48),
+                (rect.left + size * .2, rect.bottom - size * .18),
+                (rect.right - size * .12, rect.top + size * .18),
+                max(3, size // 7),
+            )
+        elif u.kind == "infernal_warlock":
+            pygame.draw.circle(
+                self.screen, (255, 119, 35), rect.center, round(size * .28)
+            )
+            pygame.draw.circle(
+                self.screen, (255, 218, 90), rect.center, round(size * .12)
+            )
+            pygame.draw.arc(
+                self.screen, (64, 25, 23), rect.inflate(-size * .15, -size * .15),
+                math.pi, math.tau, max(2, size // 8),
+            )
+        elif u.kind == "frost_colossus":
+            pygame.draw.polygon(self.screen, (205, 238, 244), [
+                (rect.centerx, rect.top + size * .06),
+                (rect.right - size * .13, rect.top + size * .38),
+                (rect.right - size * .25, rect.bottom - size * .08),
+                (rect.left + size * .25, rect.bottom - size * .08),
+                (rect.left + size * .13, rect.top + size * .38),
+            ])
+            pygame.draw.line(
+                self.screen, (65, 111, 152),
+                (rect.left + size * .22, rect.centery),
+                (rect.right - size * .22, rect.centery), max(3, size // 7),
+            )
+        elif u.kind == "ice_hurler":
+            pygame.draw.polygon(self.screen, (220, 248, 250), [
+                (rect.centerx, rect.top + size * .06),
+                (rect.right - size * .12, rect.centery),
+                (rect.centerx, rect.bottom - size * .06),
+                (rect.left + size * .12, rect.centery),
+            ])
+            pygame.draw.polygon(self.screen, (74, 132, 180), [
+                (rect.centerx, rect.top + size * .2),
+                (rect.right - size * .28, rect.centery),
+                (rect.centerx, rect.bottom - size * .2),
+                (rect.left + size * .28, rect.centery),
+            ])
         if u.kind == "archer":
             arc = pygame.Rect(rect.left + size * .15, rect.top + size * .12, size * .62, size * .76)
             pygame.draw.arc(self.screen, (109, 67, 35), arc, -math.pi / 2, math.pi / 2, max(2, size // 8))
@@ -4438,13 +7080,20 @@ class Game:
             t = 1 - life / .22
             x, y = x1 + (x2 - x1) * t, y1 + (y2 - y1) * t
             sx, sy = self.world_to_screen(x, y)
-            pygame.draw.circle(self.screen, GOLD, (int(sx), int(sy)), max(2, int(self.zoom * .13)))
+            projectile_color = {
+                "demon": (255, 114, 35),
+                "frost_giant": (191, 239, 250),
+            }.get(team, GOLD)
+            pygame.draw.circle(
+                self.screen, projectile_color, (int(sx), int(sy)),
+                max(2, int(self.zoom * .13)),
+            )
         for x, y, life, team in self.particles:
             sx, sy = self.world_to_screen(x, y)
             radius = max(2, int(self.zoom * (1 - life / .25) * .4))
             pygame.draw.circle(self.screen, CREAM, (int(sx), int(sy)), radius, 1)
         for slash in self.king_slashes:
-            if slash.team == "red" and not self.is_visible(slash.x, slash.y):
+            if slash.team == "red" and not self.is_display_visible(slash.x, slash.y):
                 continue
             progress = 1 - slash.life / KING_SLASH_LIFETIME
             reach = .35 + progress * .45
@@ -4466,7 +7115,7 @@ class Game:
             )
 
     def draw_fog(self):
-        if self.level_number == 1:
+        if self.level_number == 1 or not self.fog_of_war_enabled:
             return
         w, h = self.screen.get_size(); view_h = h - HUD_H
         left, top = self.screen_to_world((0, 0)); right, bottom = self.screen_to_world((w, view_h))
@@ -4504,6 +7153,119 @@ class Game:
         destination = self.world_to_screen(x0 - .5, y0 - .5)
         self.screen.blit(self._fog_cache_surface, (round(destination[0]), round(destination[1])))
 
+    def draw_checkpoint_objective_bar(self):
+        """Draw the persistent, clickable hold overview."""
+        self.checkpoint_bar_entries = []
+        if not self.level.has_checkpoints:
+            return
+        owner_colors = {
+            "green": GREEN, "red": RED,
+            **NATIVE_FACTION_COLORS,
+        }
+        w = self.screen.get_width()
+        gap = 8
+        count = len(self.checkpoints)
+        total_width = min(w - 28, 1200 if count > 3 else 900)
+        card_width = (total_width - gap * (count - 1)) // count
+        start_x = (w - (card_width * count + gap * (count - 1))) // 2
+        for index, checkpoint in enumerate(self.checkpoints):
+            rect = pygame.Rect(
+                start_x + index * (card_width + gap), 8, card_width, 50
+            )
+            self.checkpoint_bar_entries.append((rect, checkpoint))
+            pygame.draw.rect(self.screen, (28, 27, 24), rect, border_radius=8)
+            if self.fog_of_war_enabled and not checkpoint.discovered:
+                pygame.draw.rect(
+                    self.screen, (95, 86, 68), rect, 2, border_radius=8
+                )
+                unknown = self.title.render("?", True, (165, 155, 132))
+                self.screen.blit(unknown, unknown.get_rect(center=rect.center))
+                continue
+            pygame.draw.rect(
+                self.screen, owner_colors[checkpoint.owner], rect, 2,
+                border_radius=8,
+            )
+            icon_center = rect.x + 24, rect.centery
+            pygame.draw.circle(
+                self.screen, owner_colors[checkpoint.owner], icon_center, 14
+            )
+            pygame.draw.circle(self.screen, CREAM, icon_center, 14, 2)
+            icon = self.font.render(
+                checkpoint.native_faction[0].upper(), True, CREAM
+            )
+            self.screen.blit(icon, icon.get_rect(center=icon_center))
+            owner = {
+                "green": "VERDANT", "red": "CRIMSON",
+                **NATIVE_FACTION_LABELS,
+            }[checkpoint.owner]
+            native_label = NATIVE_FACTION_LABELS[checkpoint.native_faction]
+            if count > 3:
+                native_label = (
+                    "FROST"
+                    if checkpoint.native_faction == "frost_giant"
+                    else native_label
+                )
+                owner = "NATIVE" if checkpoint.owner == checkpoint.native_faction else owner
+                title_text = f"{native_label} • {owner}"
+            else:
+                title_text = f"{native_label} HOLD • {owner}"
+            title = self.small.render(
+                title_text, True, CREAM,
+            )
+            self.screen.blit(title, (rect.x + 45, rect.y + 8))
+            if checkpoint.contested:
+                income = int(checkpoint.profile.income)
+                status = (
+                    f"CONTESTED • +{income} OFF"
+                    if count > 3 else f"CONTESTED • +{income} SUPPRESSED"
+                )
+            elif checkpoint.capturing_team:
+                faction = {
+                    "green": "VERDANT", "red": "CRIMSON",
+                    **NATIVE_FACTION_LABELS,
+                }[checkpoint.capturing_team]
+                percent = round(
+                    checkpoint.capture_progress / CHECKPOINT_CAPTURE_SECONDS * 100
+                )
+                status = (
+                    f"{faction} • {percent}%"
+                    if count > 3 else f"{faction} CAPTURING • {percent}%"
+                )
+            elif checkpoint.owner in ("green", "red"):
+                income = int(checkpoint.profile.income)
+                status = (
+                    f"+{income} GOLD ACTIVE"
+                    if checkpoint.income_active
+                    else f"+{income} GOLD SUPPRESSED"
+                )
+            else:
+                status = (
+                    "DEFENDERS • NO INCOME"
+                    if count > 3 else "NATIVE DEFENDERS • NO INCOME"
+                )
+            status_color = (
+                (222, 119, 91) if checkpoint.under_attack else
+                (183, 207, 158) if checkpoint.income_active else
+                (190, 180, 153)
+            )
+            status_label = self.small.render(status, True, status_color)
+            self.screen.blit(status_label, (rect.x + 45, rect.y + 27))
+            if checkpoint.capturing_team:
+                progress = clamp(
+                    checkpoint.capture_progress / CHECKPOINT_CAPTURE_SECONDS,
+                    0.0, 1.0,
+                )
+                pygame.draw.rect(
+                    self.screen, (52, 48, 41),
+                    (rect.x + 45, rect.bottom - 5, rect.width - 54, 3),
+                )
+                pygame.draw.rect(
+                    self.screen,
+                    owner_colors[checkpoint.capturing_team],
+                    (rect.x + 45, rect.bottom - 5,
+                     round((rect.width - 54) * progress), 3),
+                )
+
     def draw_hud(self):
         w, h = self.screen.get_size(); top = h - HUD_H
         pygame.draw.rect(self.screen, (34, 31, 27), (0, top, w, HUD_H))
@@ -4516,7 +7278,15 @@ class Game:
             border_radius=1,
         )
         self.screen.blit(self.font.render(f"{int(self.essence):,} gold", True, CREAM), (55, top + 18))
-        self.screen.blit(self.small.render("+20 gold each second", True, (172, 158, 128)), (55, top + 44))
+        income = self.income_rate("green")
+        income_text = f"+{int(income)} gold each second"
+        if self.level.has_checkpoints:
+            owned = sum(checkpoint.owner == "green" for checkpoint in self.checkpoints)
+            income_text = (
+                f"+{int(income)} gold/sec  •  "
+                f"{owned}/{len(self.checkpoints)} holds"
+            )
+        self.screen.blit(self.small.render(income_text, True, (172, 158, 128)), (55, top + 44))
         labels = {
             "swordsman": "Hire Swordsman",
             "archer": "Hire Archer",
@@ -4626,12 +7396,28 @@ class Game:
             (191, 181, 152),
         )
         self.screen.blit(lore, (w // 2 - lore.get_width() // 2, 294))
-        self.play_btn.rect.center = (w // 2, h // 2 + 110)
+        self.play_btn.rect.center = (w // 2, h // 2 + 92)
         self.play_btn.draw(self.screen, pygame.mouse.get_pos(), self.button_font, self.button_cost_font)
+        self.editor_btn.rect.center = (w // 2, h // 2 + 152)
+        self.editor_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font,
+        )
+        self.fog_btn.rect.center = (w // 2, h // 2 + 204)
+        self.fog_btn.text = (
+            "Fog of War: ON" if self.fog_of_war_enabled else "Fog of War: OFF"
+        )
+        self.fog_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font,
+        )
         hint = self.small.render("Mouse + keyboard  •  Press Play to begin", True, (200, 190, 160))
         self.screen.blit(hint, (w // 2 - hint.get_width() // 2, h - 80))
 
-    def draw_level_select(self):
+    def _draw_level_select_legacy(self):
+        # Kept as a compatibility shim for callers from older test harnesses;
+        # the former card-grid implementation has no runtime path.
+        return self.draw_level_select()
         w, h = self.screen.get_size()
         self.screen.fill((24, 37, 28))
         heading = self.title.render("BEGIN THE CONQUEST", True, CREAM)
@@ -4889,22 +7675,969 @@ class Game:
         back = self.small.render("Esc to return", True, (190, 180, 153))
         self.screen.blit(back, back.get_rect(center=(w // 2, h - 58)))
 
+    def _wrapped_lines(self, text, font, width):
+        lines, current = [], ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if current and font.size(candidate)[0] > width:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        return lines
+
+    def _draw_selector_preview(self, rect, preview_type):
+        pygame.draw.rect(self.screen, (48, 72, 48), rect, border_radius=10)
+        pygame.draw.rect(self.screen, (120, 98, 61), rect, 2, border_radius=10)
+        path_color = (171, 139, 82)
+        r = max(6, min(rect.width, rect.height) // 24)
+        if preview_type == "ambush":
+            center = rect.center
+            pygame.draw.circle(self.screen, GREEN, center, r * 2)
+            pygame.draw.circle(self.screen, CREAM, center, r * 2, 2)
+            for angle in (-2.6, -2.0, -1.2, -.45, .45, 1.2, 2.0, 2.6):
+                point = (
+                    round(center[0] + math.cos(angle) * rect.width * .35),
+                    round(center[1] + math.sin(angle) * rect.height * .35),
+                )
+                pygame.draw.circle(self.screen, RED, point, r)
+                pygame.draw.line(self.screen, RED, point, center, 2)
+        elif preview_type == "road_waves":
+            points = [
+                (rect.x + 12, rect.bottom - rect.height * .25),
+                (rect.x + rect.width * .30, rect.y + rect.height * .35),
+                (rect.x + rect.width * .62, rect.y + rect.height * .62),
+                (rect.right - 12, rect.y + rect.height * .28),
+            ]
+            pygame.draw.lines(self.screen, path_color, False, points, r * 2)
+            pygame.draw.circle(self.screen, GREEN, points[0], r * 2)
+            pygame.draw.circle(self.screen, RED, points[-1], r * 2)
+            for amount in (.38, .56, .72):
+                x = round(rect.x + rect.width * amount)
+                y = round(rect.y + rect.height * (.30 + amount * .35))
+                for offset in (-r * 2, 0, r * 2):
+                    pygame.draw.circle(self.screen, RED, (x, y + offset), r)
+        elif preview_type == "full_siege":
+            road_y = rect.centery
+            pygame.draw.line(
+                self.screen, path_color,
+                (rect.x + 12, road_y), (rect.right - 12, road_y), r * 2,
+            )
+            wall_x = rect.x + round(rect.width * .72)
+            pygame.draw.rect(
+                self.screen, (91, 86, 76),
+                (wall_x, rect.y + rect.height * .18, rect.width * .20,
+                 rect.height * .64),
+            )
+            for row in range(3):
+                for column in range(5):
+                    pygame.draw.circle(
+                        self.screen, GREEN,
+                        (rect.x + round(rect.width * (.18 + column * .08)),
+                         rect.y + round(rect.height * (.32 + row * .18))), r,
+                    )
+            pygame.draw.circle(self.screen, RED, (wall_x + r * 3, road_y), r * 2)
+        else:
+            road_y = rect.centery
+            pygame.draw.line(
+                self.screen, path_color,
+                (rect.x + 12, road_y), (rect.right - 12, road_y), r * 2,
+            )
+            holds = (
+                (.32, .24, (132, 119, 92)),
+                (.51, .76, (70, 151, 125)),
+                (.69, .26, (132, 112, 48)),
+            )
+            for x_ratio, y_ratio, color in holds:
+                point = (
+                    rect.x + round(rect.width * x_ratio),
+                    rect.y + round(rect.height * y_ratio),
+                )
+                pygame.draw.line(
+                    self.screen, path_color,
+                    (point[0], road_y), point, max(3, r // 2),
+                )
+                pygame.draw.circle(self.screen, color, point, r * 2)
+                pygame.draw.circle(self.screen, CREAM, point, r * 2, 2)
+            pygame.draw.circle(self.screen, GREEN, (rect.x + 20, road_y), r * 2)
+            pygame.draw.circle(self.screen, RED, (rect.right - 20, road_y), r * 2)
+
+    def _campaign_location_points(self, map_rect):
+        """Return the five mission locations along the campaign road."""
+        ratios = {
+            1: (.16, .74),
+            2: (.35, .62),
+            3: (.52, .48),
+            4: (.69, .35),
+            5: (.84, .19),
+        }
+        return {
+            number: (
+                map_rect.x + round(map_rect.width * x_ratio),
+                map_rect.y + round(map_rect.height * y_ratio),
+            )
+            for number, (x_ratio, y_ratio) in ratios.items()
+        }
+
+    def _draw_campaign_map(self, map_rect):
+        """Draw the shared campaign world and its clickable mission markers."""
+        mouse = pygame.mouse.get_pos()
+        pygame.draw.rect(self.screen, (25, 54, 61), map_rect, border_radius=18)
+        pygame.draw.rect(
+            self.screen, (105, 91, 61), map_rect, 3, border_radius=18
+        )
+
+        for row in range(7):
+            y = map_rect.y + round(map_rect.height * (.12 + row * .13))
+            offset = (row % 2) * 18
+            for x in range(map_rect.x + 18 + offset, map_rect.right - 26, 68):
+                pygame.draw.arc(
+                    self.screen, (42, 78, 82),
+                    (x, y, 28, 10), 0, math.pi, 1,
+                )
+
+        def point(x_ratio, y_ratio):
+            return (
+                map_rect.x + round(map_rect.width * x_ratio),
+                map_rect.y + round(map_rect.height * y_ratio),
+            )
+
+        coast_ratios = (
+            (.07, .75), (.10, .51), (.06, .33), (.18, .16),
+            (.39, .08), (.55, .13), (.74, .07), (.91, .19),
+            (.94, .38), (.88, .54), (.93, .70), (.78, .87),
+            (.57, .91), (.41, .85), (.23, .91),
+        )
+        coast = [point(*ratio) for ratio in coast_ratios]
+        shadow = [(x + 7, y + 9) for x, y in coast]
+        pygame.draw.polygon(self.screen, (20, 39, 39), shadow)
+        pygame.draw.polygon(self.screen, (81, 110, 63), coast)
+
+        # Broad regions make each stop feel like a distinct destination.
+        pygame.draw.polygon(self.screen, (100, 131, 72), [
+            point(.08, .70), point(.17, .50), point(.39, .53),
+            point(.47, .85), point(.23, .90),
+        ])
+        pygame.draw.polygon(self.screen, (51, 98, 60), [
+            point(.12, .48), point(.17, .18), point(.43, .09),
+            point(.50, .51), point(.35, .60),
+        ])
+        pygame.draw.polygon(self.screen, (126, 112, 72), [
+            point(.48, .50), point(.56, .14), point(.77, .08),
+            point(.84, .43), point(.71, .55),
+        ])
+        pygame.draw.polygon(self.screen, (76, 109, 72), [
+            point(.47, .53), point(.72, .50), point(.89, .70),
+            point(.77, .86), point(.48, .86),
+        ])
+        pygame.draw.polygon(self.screen, (115, 126, 111), [
+            point(.73, .08), point(.91, .18), point(.92, .39),
+            point(.83, .42),
+        ])
+        pygame.draw.lines(self.screen, (173, 151, 91), True, coast, 3)
+
+        river = [
+            point(.45, .12), point(.48, .27), point(.45, .42),
+            point(.51, .56), point(.48, .73), point(.55, .88),
+        ]
+        pygame.draw.lines(self.screen, (42, 82, 94), False, river, 6)
+        pygame.draw.lines(self.screen, (84, 134, 141), False, river, 2)
+        for x_ratio, y_ratio in ((.21, .28), (.27, .34), (.31, .24), (.40, .30)):
+            x, y = point(x_ratio, y_ratio)
+            pygame.draw.circle(self.screen, (35, 76, 48), (x, y), 8)
+            pygame.draw.circle(self.screen, (58, 111, 61), (x - 4, y - 5), 6)
+        for x_ratio, y_ratio in ((.61, .19), (.68, .15), (.75, .22), (.79, .14)):
+            x, y = point(x_ratio, y_ratio)
+            pygame.draw.polygon(self.screen, (74, 73, 67), [
+                (x - 11, y + 9), (x, y - 11), (x + 11, y + 9),
+            ])
+            pygame.draw.polygon(self.screen, (196, 195, 174), [
+                (x - 3, y - 4), (x, y - 11), (x + 4, y - 3),
+            ])
+
+        locations = self._campaign_location_points(map_rect)
+        route = [locations[number] for number in sorted(LEVELS)]
+        pygame.draw.lines(self.screen, (66, 53, 38), False, route, 11)
+        pygame.draw.lines(self.screen, (211, 171, 87), False, route, 6)
+        for start, end in zip(route, route[1:]):
+            for step in (.25, .50, .75):
+                dash = (
+                    round(start[0] + (end[0] - start[0]) * step),
+                    round(start[1] + (end[1] - start[1]) * step),
+                )
+                pygame.draw.circle(self.screen, (247, 218, 140), dash, 2)
+
+        location_names = {
+            1: "BRIARWATCH",
+            2: "KINGSROAD",
+            3: "CROWNHEART",
+            4: "THREE HOLDS",
+            5: "FROSTFALL",
+        }
+        self.level_location_rects = []
+        for number, center in locations.items():
+            hit_rect = pygame.Rect(0, 0, 56, 56)
+            hit_rect.center = center
+            self.level_location_rects.append((hit_rect, number))
+            selected = number == self.selected_level_page
+            hovered = hit_rect.collidepoint(mouse)
+            if selected:
+                pygame.draw.circle(self.screen, (36, 32, 26), center, 24)
+                pygame.draw.circle(self.screen, GOLD, center, 23, 4)
+            elif hovered:
+                pygame.draw.circle(self.screen, CREAM, center, 20, 3)
+            pygame.draw.circle(
+                self.screen,
+                GREEN if selected else (105, 56, 46),
+                center, 17,
+            )
+            pygame.draw.circle(self.screen, (36, 31, 26), center, 17, 3)
+            number_surface = self.font.render(str(number), True, CREAM)
+            self.screen.blit(
+                number_surface, number_surface.get_rect(center=center)
+            )
+            name = self.small.render(location_names[number], True, CREAM)
+            name_rect = name.get_rect(
+                center=(center[0], center[1] + (34 if number != 5 else -34))
+            ).inflate(12, 5)
+            pygame.draw.rect(
+                self.screen, (31, 34, 28), name_rect, border_radius=6
+            )
+            self.screen.blit(name, name.get_rect(center=name_rect.center))
+
+    def draw_level_select(self):
+        """Draw every level as a location on one shared campaign map."""
+        w, h = self.screen.get_size()
+        config = LEVELS[self.selected_level_page]
+        self.screen.fill((24, 37, 28))
+        heading = self.title.render("THE VERDANT CAMPAIGN", True, CREAM)
+        self.screen.blit(heading, heading.get_rect(midleft=(28, 34)))
+        if w >= 1000:
+            campaign_hint = self.small.render(
+                "Choose a location along the road to conquest", True,
+                (190, 180, 153),
+            )
+            self.screen.blit(
+                campaign_hint, campaign_hint.get_rect(midright=(w - 28, 34))
+            )
+
+        content = pygame.Rect(28, 64, w - 56, h - 110)
+        compact = w < 900
+        if compact:
+            map_rect = pygame.Rect(
+                content.x, content.y, content.width,
+                max(250, round(content.height * .52)),
+            )
+            details = pygame.Rect(
+                content.x, map_rect.bottom + 12, content.width,
+                content.bottom - map_rect.bottom - 12,
+            )
+        else:
+            map_width = round(content.width * .66)
+            map_rect = pygame.Rect(
+                content.x, content.y, map_width, content.height
+            )
+            details = pygame.Rect(
+                map_rect.right + 16, content.y,
+                content.right - map_rect.right - 16, content.height,
+            )
+        self._draw_campaign_map(map_rect)
+
+        pygame.draw.rect(self.screen, (43, 41, 35), details, border_radius=16)
+        pygame.draw.rect(
+            self.screen, (132, 106, 65), details, 3, border_radius=16
+        )
+        inset = 22
+        detail_width = details.width - inset * 2
+        y = details.y + 18
+        level_label = self.small.render(
+            f"LOCATION {config.number}  •  {config.name}", True, GOLD
+        )
+        self.screen.blit(level_label, (details.x + inset, y))
+        y += 25
+        title_font = self.title if details.width >= 360 else self.font
+        title = title_font.render(config.display_title, True, CREAM)
+        title_rect = title.get_rect(topleft=(details.x + inset, y))
+        self.screen.blit(title, title_rect)
+        y = title_rect.bottom + 14
+        pygame.draw.line(
+            self.screen, (118, 94, 58),
+            (details.x + inset, y), (details.right - inset, y), 1,
+        )
+        y += 14
+        difficulty = self.font.render(
+            f"DIFFICULTY  •  {config.difficulty_label}", True, GOLD
+        )
+        self.screen.blit(difficulty, (details.x + inset, y))
+        y += 30
+        story_text = config.story_text or config.description
+        for line in self._wrapped_lines(story_text, self.small, detail_width):
+            self.screen.blit(
+                self.small.render(line, True, (202, 192, 163)),
+                (details.x + inset, y),
+            )
+            y += 20
+        y += 9
+        unit_names = {
+            "swordsman": "Swordsmen", "archer": "Archers",
+            "shield": "Shields",
+        }
+        unit_roster = "  •  ".join(
+            unit_names[kind] for kind in config.player_units
+        )
+        facts = (
+            (f"MAP  {config.map_size} × {config.map_size}  •  "
+             f"UNITS  {unit_roster}"),
+        ) if compact else (
+            f"MAP  {config.map_size} × {config.map_size}",
+            f"UNITS  {unit_roster}",
+            "OBJECTIVE  " + config.description,
+        )
+        for fact in facts:
+            for line in self._wrapped_lines(fact, self.small, detail_width):
+                self.screen.blit(
+                    self.small.render(line, True, (190, 180, 153)),
+                    (details.x + inset, y),
+                )
+                y += 19
+            y += 3
+        tag_x, tag_y = details.x + inset, y + 5
+        for tag in (() if compact else config.mechanic_tags):
+            tag_surface = self.small.render(tag.upper(), True, (235, 211, 145))
+            tag_rect = tag_surface.get_rect().inflate(16, 8)
+            if tag_x + tag_rect.width > details.right - inset:
+                tag_x, tag_y = details.x + inset, tag_y + 28
+            tag_rect.topleft = tag_x, tag_y
+            pygame.draw.rect(
+                self.screen, (74, 63, 45), tag_rect, border_radius=8
+            )
+            pygame.draw.rect(
+                self.screen, (126, 100, 61), tag_rect, 1, border_radius=8
+            )
+            self.screen.blit(
+                tag_surface, tag_surface.get_rect(center=tag_rect.center)
+            )
+            tag_x = tag_rect.right + 8
+        play = Button(
+            (details.x + inset, details.bottom - 60, detail_width, 42),
+            f"Deploy to Location {config.number}",
+        )
+        play.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font,
+        )
+        self.level_buttons = [(play, config.number)]
+        self.level_nav_buttons = []
+        self.level_dot_rects = []
+        hint = self.small.render(
+            "Click a location  •  1–5 choose  •  Enter deploy  •  Esc return",
+            True, (190, 180, 153),
+        )
+        self.screen.blit(hint, hint.get_rect(center=(w // 2, h - 20)))
+        if config.number == 5:
+            self.selector_layout = {
+                "title": title_rect.copy(), "play": play.rect.copy(), "page": 5,
+            }
+        else:
+            self.selector_layout = {
+                "map": map_rect, "details": details,
+                "play": play.rect.copy(), "page": config.number,
+            }
+
+    def _draw_editor_button(self, rect, text, action, active=False, enabled=True):
+        button = Button(rect, text)
+        button.draw(
+            self.screen, pygame.mouse.get_pos(), self.small,
+            self.button_cost_font, enabled,
+        )
+        if active:
+            pygame.draw.rect(self.screen, GOLD, button.rect, 3, border_radius=7)
+        self.editor_buttons.append((button, action))
+        return button
+
+    def _draw_editor_slider(
+        self, x, y, width, label, value, key,
+        minimum=0, maximum=100, step=1, values=None, display=None,
+    ):
+        """Draw and register one draggable randomizer control."""
+        value_label = str(value) if display is None else display
+        self.screen.blit(self.small.render(label, True, GOLD), (x, y))
+        rendered_value = self.small.render(value_label, True, CREAM)
+        self.screen.blit(
+            rendered_value,
+            rendered_value.get_rect(topright=(x + width, y)),
+        )
+        track = pygame.Rect(x + 7, y + 27, width - 14, 6)
+        pygame.draw.rect(self.screen, (73, 68, 55), track, border_radius=3)
+        if values is not None:
+            index = values.index(value)
+            progress = index / max(1, len(values) - 1)
+        else:
+            progress = (value - minimum) / max(1, maximum - minimum)
+        fill = track.copy()
+        fill.width = round(track.width * progress)
+        pygame.draw.rect(self.screen, GOLD, fill, border_radius=3)
+        knob = (track.x + round(track.width * progress), track.centery)
+        pygame.draw.circle(self.screen, (35, 31, 25), knob, 8)
+        pygame.draw.circle(self.screen, CREAM, knob, 6)
+        self.editor_sliders.append({
+            "rect": track.inflate(18, 22),
+            "track": track,
+            "key": key,
+            "minimum": minimum,
+            "maximum": maximum,
+            "step": step,
+            "values": values,
+        })
+
+    def _set_editor_slider_from_x(self, slider, x):
+        """Apply a slider position to its randomizer setting."""
+        track = slider["track"]
+        progress = clamp((x - track.x) / track.width, 0.0, 1.0)
+        values = slider["values"]
+        if values is not None:
+            index = round(progress * (len(values) - 1))
+            value = values[index]
+        else:
+            raw = slider["minimum"] + progress * (
+                slider["maximum"] - slider["minimum"]
+            )
+            step = slider["step"]
+            value = round(raw / step) * step
+            value = int(clamp(value, slider["minimum"], slider["maximum"]))
+        self._set_editor_randomizer_value(slider["key"], value)
+
+    def _set_editor_randomizer_value(self, key, value):
+        """Store one randomizer option, resizing the live draft when needed."""
+        if key == "map_size":
+            if value != self.editor_draft.map_size:
+                self.editor_draft.resize(value)
+                self.editor_revision += 1
+        elif key == "hold_count":
+            self.editor_random_hold_count = value
+        elif key == "hold_connections":
+            self.editor_random_hold_connections = value
+        elif key == "path_amount":
+            self.editor_random_path_amount = value
+        elif key.startswith("terrain:"):
+            terrain_kind = key.split(":", 1)[1]
+            other_total = sum(
+                weight
+                for kind, weight in self.editor_random_terrain_weights.items()
+                if kind != terrain_kind
+            )
+            if value == 0 and other_total == 0:
+                self.editor_notice = "At least one terrain ratio must stay above zero"
+                return
+            self.editor_random_terrain_weights[terrain_kind] = value
+        self.editor_notice = "Randomizer settings updated — click Randomize"
+
+    def _draw_editor_map(self, rect):
+        draft = self.editor_draft
+        cache_key = (
+            self.editor_revision, draft.map_size, rect.width, rect.height
+        )
+        if cache_key != self._editor_map_cache_key:
+            overview = pygame.Surface((draft.map_size, draft.map_size))
+            colors = {
+                "plains": (91, 132, 65),
+                "forest": (35, 77, 44),
+                "mountain": (101, 101, 94),
+                "path": (181, 145, 80),
+            }
+            for (x, y), cell in draft.terrain.items():
+                overview.set_at((x, y), colors[cell.kind])
+            self._editor_map_cache = pygame.transform.scale(
+                overview, rect.size
+            )
+            self._editor_map_cache_key = cache_key
+        self.screen.blit(self._editor_map_cache, rect)
+        pygame.draw.rect(self.screen, (204, 177, 111), rect, 3)
+
+        def overview_point(position):
+            return (
+                rect.x + round(position[0] / draft.map_size * rect.width),
+                rect.y + round(position[1] / draft.map_size * rect.height),
+            )
+
+        for hold in draft.holds:
+            center = overview_point((hold.x + .5, hold.y + .5))
+            pygame.draw.circle(self.screen, (34, 30, 25), center, 9)
+            pygame.draw.circle(self.screen, GOLD, center, 7, 2)
+            pygame.draw.circle(self.screen, CREAM, center, 2)
+        for position, color, letter in (
+            (draft.green_start, GREEN, "V"),
+            (draft.red_start, RED, "C"),
+        ):
+            center = overview_point(position)
+            pygame.draw.circle(self.screen, (31, 28, 24), center, 13)
+            pygame.draw.circle(self.screen, color, center, 11)
+            marker = self.small.render(letter, True, CREAM)
+            self.screen.blit(marker, marker.get_rect(center=center))
+
+    def draw_level_editor(self):
+        """Draw the custom battlefield editor and its contextual controls."""
+        w, h = self.screen.get_size()
+        self.screen.fill((22, 31, 26))
+        self.editor_buttons = []
+        self.editor_sliders = []
+        self._draw_editor_button((20, 15, 88, 34), "Back", "back")
+        title = self.title.render("LEVEL FORGE", True, CREAM)
+        self.screen.blit(title, (126, 12))
+        subtitle = self.small.render(
+            "Paint the battlefield, place objectives, tune the battle, then play it.",
+            True, (190, 180, 153),
+        )
+        self.screen.blit(subtitle, (390, 26))
+
+        panel_w = int(clamp(round(w * .30), 350, 410))
+        panel = pygame.Rect(w - panel_w - 18, 62, panel_w, h - 80)
+        left = pygame.Rect(18, 62, panel.x - 32, h - 80)
+        map_side = max(120, min(left.width - 24, left.height - 58))
+        self.editor_canvas = left
+        self.editor_map_rect = pygame.Rect(0, 0, map_side, map_side)
+        self.editor_map_rect.centerx = left.centerx
+        self.editor_map_rect.y = left.y + 30
+
+        pygame.draw.rect(self.screen, (39, 43, 34), left, border_radius=14)
+        pygame.draw.rect(self.screen, (111, 91, 58), left, 2, border_radius=14)
+        map_label = self.small.render(
+            f"CUSTOM OVERVIEW  •  {self.editor_draft.map_size} × "
+            f"{self.editor_draft.map_size}  •  {len(self.editor_draft.holds)} holds",
+            True, GOLD,
+        )
+        self.screen.blit(map_label, (left.x + 14, left.y + 8))
+        self._draw_editor_map(self.editor_map_rect)
+        tool_name = self.editor_tool.replace("_", " ").title()
+        hint = self.small.render(
+            f"Tool: {tool_name}  •  Drag to paint  •  Brush {self.editor_brush_size}",
+            True, (196, 187, 158),
+        )
+        self.screen.blit(
+            hint, hint.get_rect(center=(left.centerx, left.bottom - 15))
+        )
+
+        pygame.draw.rect(self.screen, (43, 41, 35), panel, border_radius=14)
+        pygame.draw.rect(self.screen, (132, 106, 65), panel, 2, border_radius=14)
+        inset, gap = 14, 7
+        inner_x, inner_w = panel.x + inset, panel.width - inset * 2
+        tab_y = panel.y + 14
+        tabs = (
+            ("PAINT", "paint"), ("RANDOM", "randomizer"),
+            ("SETTINGS", "settings"), ("ARMIES", "armies"),
+        )
+        tab_w = (inner_w - gap * (len(tabs) - 1)) // len(tabs)
+        for index, (label, tab) in enumerate(tabs):
+            self._draw_editor_button(
+                (inner_x + index * (tab_w + gap), tab_y, tab_w, 34),
+                label, f"tab:{tab}", self.editor_tab == tab,
+            )
+        content_y = tab_y + 48
+        if self.editor_tab == "paint":
+            tools = (
+                ("Plains", "plains"), ("Forest", "forest"),
+                ("Mountain", "mountain"), ("Path / Road", "path"),
+                ("Hold", "hold"), ("Verdant Start", "green_start"),
+                ("Crimson Start", "red_start"),
+            )
+            tool_w = (inner_w - gap) // 2
+            for index, (label, tool) in enumerate(tools):
+                row, column = divmod(index, 2)
+                self._draw_editor_button(
+                    (inner_x + column * (tool_w + gap),
+                     content_y + row * 42, tool_w, 35),
+                    label, f"tool:{tool}", self.editor_tool == tool,
+                )
+            y = content_y + 4 * 42 + 7
+            self.screen.blit(
+                self.small.render("BRUSH SIZE", True, GOLD), (inner_x, y)
+            )
+            y += 24
+            brush_w = (inner_w - gap * 2) // 3
+            for index, size in enumerate((1, 3, 7)):
+                self._draw_editor_button(
+                    (inner_x + index * (brush_w + gap), y, brush_w, 34),
+                    str(size), f"brush:{size}", self.editor_brush_size == size,
+                )
+            y += 52
+            info = (
+                "Terrain and paths use the selected brush. Holds toggle on "
+                "click. Start markers set each king's keep."
+            )
+            for line in self._wrapped_lines(info, self.small, inner_w):
+                self.screen.blit(
+                    self.small.render(line, True, (188, 179, 151)),
+                    (inner_x, y),
+                )
+                y += 19
+        elif self.editor_tab == "randomizer":
+            y = content_y
+            slider_gap = 47
+            randomizer_sliders = (
+                (
+                    "MAP SIZE", self.editor_draft.map_size, "map_size",
+                    {"values": EDITOR_MAP_SIZES,
+                     "display": f"{self.editor_draft.map_size} × {self.editor_draft.map_size}"},
+                ),
+                (
+                    "HOLD NUMBER", self.editor_random_hold_count, "hold_count",
+                    {"minimum": 0, "maximum": 12},
+                ),
+                (
+                    "HOLDS CONNECTED TO PATH",
+                    self.editor_random_hold_connections, "hold_connections",
+                    {"step": 5,
+                     "display": f"{self.editor_random_hold_connections}%"},
+                ),
+                (
+                    "PATH AMOUNT", self.editor_random_path_amount, "path_amount",
+                    {"step": 5, "display": f"{self.editor_random_path_amount}%"},
+                ),
+            )
+            for label, value, key, options in randomizer_sliders:
+                self._draw_editor_slider(
+                    inner_x, y, inner_w, label, value, key, **options
+                )
+                y += slider_gap
+            self.screen.blit(
+                self.small.render("TERRAIN RATIO WEIGHTS", True, GOLD),
+                (inner_x, y),
+            )
+            y += 23
+            for label, terrain_kind in (
+                ("Plains", "plains"), ("Forest", "forest"),
+                ("Mountain", "mountain"),
+            ):
+                weight = self.editor_random_terrain_weights[terrain_kind]
+                self._draw_editor_slider(
+                    inner_x, y, inner_w, label.upper(), weight,
+                    f"terrain:{terrain_kind}", step=5,
+                )
+                y += 42
+        elif self.editor_tab == "settings":
+            draft = self.editor_draft
+            rows = (
+                ("MAP SIZE", draft.map_size, "size"),
+                ("VERDANT INCOME / SEC", int(draft.green_income), "income:green"),
+                ("CRIMSON INCOME / SEC", int(draft.red_income), "income:red"),
+            )
+            y = content_y
+            for label, value, action in rows:
+                self.screen.blit(self.small.render(label, True, GOLD), (inner_x, y))
+                y += 24
+                self._draw_editor_button((inner_x, y, 54, 34), "−", f"{action}:-")
+                value_surface = self.font.render(str(value), True, CREAM)
+                self.screen.blit(
+                    value_surface,
+                    value_surface.get_rect(center=(inner_x + inner_w // 2, y + 17)),
+                )
+                self._draw_editor_button(
+                    (inner_x + inner_w - 54, y, 54, 34), "+", f"{action}:+"
+                )
+                y += 57
+            self.screen.blit(self.small.render("FOG OF WAR", True, GOLD), (inner_x, y))
+            y += 25
+            self._draw_editor_button(
+                (inner_x, y, inner_w, 38),
+                "Enabled" if draft.fog_of_war else "Disabled",
+                "fog", draft.fog_of_war,
+            )
+            y += 54
+            info = (
+                "Resizing preserves your design by scaling terrain, holds, "
+                "and starting positions to the new battlefield."
+            )
+            for line in self._wrapped_lines(info, self.small, inner_w):
+                self.screen.blit(
+                    self.small.render(line, True, (188, 179, 151)),
+                    (inner_x, y),
+                )
+                y += 19
+        else:
+            draft = self.editor_draft
+            y = content_y
+            self.screen.blit(self.small.render("AVAILABLE TO VERDANT", True, GOLD), (inner_x, y))
+            y += 25
+            unit_labels = {
+                "swordsman": "Swords", "archer": "Archers", "shield": "Shields",
+            }
+            unit_w = (inner_w - gap * 2) // 3
+            for index, kind in enumerate(UNIT_KINDS):
+                self._draw_editor_button(
+                    (inner_x + index * (unit_w + gap), y, unit_w, 35),
+                    unit_labels[kind], f"available:{kind}",
+                    kind in draft.available_units,
+                )
+            y += 53
+            self.screen.blit(
+                self.small.render("STARTING UNITS", True, GOLD), (inner_x, y)
+            )
+            y += 24
+            label_w = 150
+            for team, team_label, counts in (
+                ("green", "VERDANT", draft.green_starting_counts),
+                ("red", "CRIMSON", draft.red_starting_counts),
+            ):
+                team_color = GREEN if team == "green" else RED
+                self.screen.blit(
+                    self.small.render(team_label, True, team_color), (inner_x, y)
+                )
+                y += 22
+                for kind in UNIT_KINDS:
+                    self.screen.blit(
+                        self.small.render(unit_labels[kind], True, (205, 195, 166)),
+                        (inner_x + 5, y + 8),
+                    )
+                    self._draw_editor_button(
+                        (inner_x + label_w, y, 38, 32), "−",
+                        f"count:{team}:{kind}:-",
+                    )
+                    count_surface = self.font.render(str(counts[kind]), True, CREAM)
+                    self.screen.blit(
+                        count_surface,
+                        count_surface.get_rect(center=(inner_x + label_w + 65, y + 16)),
+                    )
+                    self._draw_editor_button(
+                        (inner_x + label_w + 92, y, 38, 32), "+",
+                        f"count:{team}:{kind}:+",
+                    )
+                    y += 36
+                y += 8
+
+        bottom_y = panel.bottom - 48
+        actions = (
+            ("Randomize", "randomize"), ("Reset", "reset"),
+            ("Save", "save"), ("Play", "play"),
+        )
+        action_w = (inner_w - gap * (len(actions) - 1)) // len(actions)
+        for index, (label, action) in enumerate(actions):
+            self._draw_editor_button(
+                (inner_x + index * (action_w + gap), bottom_y, action_w, 34),
+                label, action,
+            )
+        notice = self.small.render(self.editor_notice, True, (196, 187, 158))
+        self.screen.blit(
+            notice,
+            notice.get_rect(bottomleft=(inner_x, bottom_y - 8)),
+        )
+
+    def _editor_cell_at(self, position):
+        if not self.editor_map_rect.collidepoint(position):
+            return None
+        relative_x = (position[0] - self.editor_map_rect.x) / self.editor_map_rect.width
+        relative_y = (position[1] - self.editor_map_rect.y) / self.editor_map_rect.height
+        return (
+            min(self.editor_draft.map_size - 1, int(relative_x * self.editor_draft.map_size)),
+            min(self.editor_draft.map_size - 1, int(relative_y * self.editor_draft.map_size)),
+        )
+
+    def _apply_editor_tool(self, cell):
+        if cell is None:
+            return
+        draft, tool = self.editor_draft, self.editor_tool
+        x, y = cell
+        changed = False
+        if tool in TERRAIN_KINDS:
+            radius = self.editor_brush_size // 2
+            for paint_x in range(max(0, x - radius), min(draft.map_size, x + radius + 1)):
+                for paint_y in range(max(0, y - radius), min(draft.map_size, y + radius + 1)):
+                    old = draft.terrain[(paint_x, paint_y)]
+                    draft.terrain[(paint_x, paint_y)] = TerrainCell(tool, old.variation)
+                    changed = True
+        elif tool == "hold":
+            existing = next((hold for hold in draft.holds if (hold.x, hold.y) == cell), None)
+            if existing:
+                draft.holds.remove(existing)
+                self.editor_notice = "Hold removed"
+            elif len(draft.holds) < 12:
+                draft.holds.append(EditorHold(x, y))
+                self.editor_notice = "Hold placed"
+            else:
+                self.editor_notice = "Maximum of 12 holds reached"
+                return
+            changed = True
+        elif tool in ("green_start", "red_start"):
+            position = (
+                clamp(x + .5, 2.5, draft.map_size - 2.5),
+                clamp(y + .5, 2.5, draft.map_size - 2.5),
+            )
+            if tool == "green_start":
+                draft.green_start = position
+                self.editor_notice = "Verdant starting keep moved"
+            else:
+                draft.red_start = position
+                self.editor_notice = "Crimson starting keep moved"
+            changed = True
+        if changed:
+            self.editor_revision += 1
+
+    def _handle_editor_action(self, action):
+        draft = self.editor_draft
+        if action == "back":
+            self.state = "menu"
+        elif action.startswith("tab:"):
+            self.editor_tab = action.split(":", 1)[1]
+        elif action.startswith("tool:"):
+            self.editor_tool = action.split(":", 1)[1]
+        elif action.startswith("brush:"):
+            self.editor_brush_size = int(action.split(":", 1)[1])
+        elif action.startswith("size:"):
+            direction = -1 if action.endswith(":-") else 1
+            index = EDITOR_MAP_SIZES.index(draft.map_size)
+            new_index = int(clamp(index + direction, 0, len(EDITOR_MAP_SIZES) - 1))
+            if new_index != index:
+                draft.resize(EDITOR_MAP_SIZES[new_index])
+                self.editor_revision += 1
+                self.editor_notice = f"Map resized to {draft.map_size} × {draft.map_size}"
+        elif action.startswith("income:"):
+            _, team, change = action.split(":")
+            attribute = "green_income" if team == "green" else "red_income"
+            value = getattr(draft, attribute) + (-5 if change == "-" else 5)
+            setattr(draft, attribute, float(clamp(value, 0, 100)))
+        elif action == "fog":
+            draft.fog_of_war = not draft.fog_of_war
+            self.editor_notice = (
+                "Fog of war enabled" if draft.fog_of_war else "Fog of war disabled"
+            )
+        elif action.startswith("available:"):
+            kind = action.split(":", 1)[1]
+            if kind in draft.available_units and len(draft.available_units) == 1:
+                self.editor_notice = "At least one unit must stay available"
+            elif kind in draft.available_units:
+                draft.available_units.remove(kind)
+            else:
+                draft.available_units.add(kind)
+        elif action.startswith("count:"):
+            _, team, kind, change = action.split(":")
+            counts = (
+                draft.green_starting_counts
+                if team == "green" else draft.red_starting_counts
+            )
+            counts[kind] = int(clamp(
+                counts[kind] + (-1 if change == "-" else 1), 0, 30
+            ))
+        elif action == "randomize":
+            self.editor_draft = make_random_editor_draft(
+                draft,
+                hold_count=self.editor_random_hold_count,
+                hold_connection_ratio=(
+                    self.editor_random_hold_connections / 100
+                ),
+                path_amount=self.editor_random_path_amount / 100,
+                terrain_weights=self.editor_random_terrain_weights,
+            )
+            self.editor_revision += 1
+            self.editor_notice = (
+                f"Randomized {draft.map_size} × {draft.map_size} battlefield"
+            )
+        elif action == "reset":
+            self.editor_draft = make_default_editor_draft()
+            self.editor_revision += 1
+            self.editor_notice = "Expanded 200 × 200 canvas restored"
+        elif action == "save":
+            try:
+                CUSTOM_LEVEL_FILE.write_text(
+                    json.dumps(draft.to_dict(), indent=2), encoding="utf-8"
+                )
+                self.editor_notice = "Custom level saved"
+            except OSError:
+                self.editor_notice = "Could not save custom level"
+        elif action == "play":
+            self.start_custom_level()
+            self.state = "playing"
+            self.update_visibility()
+
+    def handle_level_editor_event(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self.state = "menu"
+            return
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for button, action in self.editor_buttons:
+                if button.rect.collidepoint(event.pos):
+                    self._handle_editor_action(action)
+                    return
+            for slider in self.editor_sliders:
+                if slider["rect"].collidepoint(event.pos):
+                    self.editor_slider_dragging = slider
+                    self._set_editor_slider_from_x(slider, event.pos[0])
+                    return
+            cell = self._editor_cell_at(event.pos)
+            if cell is not None:
+                self._apply_editor_tool(cell)
+                self.editor_dragging = self.editor_tool in TERRAIN_KINDS
+        elif event.type == pygame.MOUSEMOTION and self.editor_dragging:
+            if event.buttons[0]:
+                self._apply_editor_tool(self._editor_cell_at(event.pos))
+        elif event.type == pygame.MOUSEMOTION and self.editor_slider_dragging:
+            if event.buttons[0]:
+                self._set_editor_slider_from_x(
+                    self.editor_slider_dragging, event.pos[0]
+                )
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.editor_dragging = False
+            self.editor_slider_dragging = None
+
+    def handle_level_select_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.state = "menu"
+                return
+            if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                change = -1 if event.key == pygame.K_LEFT else 1
+                self.selected_level_page = int(clamp(
+                    self.selected_level_page + change, min(LEVELS), max(LEVELS)
+                ))
+                return
+            if event.key in (
+                pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5
+            ):
+                self.selected_level_page = event.key - pygame.K_0
+                return
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.start_level(self.selected_level_page)
+                self.state = "playing"
+                self.update_visibility()
+                return
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for marker, number in self.level_location_rects:
+                if marker.collidepoint(event.pos):
+                    self.selected_level_page = number
+                    return
+            for button, number in self.level_buttons:
+                if button.rect.collidepoint(event.pos):
+                    self.start_level(number)
+                    self.state = "playing"
+                    self.update_visibility()
+                    return
+
     def draw_game(self):
         self.draw_terrain()
+        self.draw_checkpoints()
         for u in self.units: self.draw_unit(u)
         self.draw_effects(); self.draw_fog()
+        self.draw_checkpoint_edge_markers()
         if self.drag_start and self.drag_now:
             rect = pygame.Rect(self.drag_start, (self.drag_now[0] - self.drag_start[0], self.drag_now[1] - self.drag_start[1])); rect.normalize()
             overlay = pygame.Surface(rect.size, pygame.SRCALPHA); overlay.fill((102, 192, 112, 45)); self.screen.blit(overlay, rect)
             pygame.draw.rect(self.screen, (134, 211, 142), rect, 1)
         self.draw_hud()
+        self.draw_checkpoint_objective_bar()
         if self.message_time > 0:
             label = self.font.render(self.message, True, CREAM)
             panel_padding = 10
             box = label.get_rect(
-                midtop=(self.screen.get_width() // 2, panel_padding)
+                midtop=(
+                    self.screen.get_width() // 2,
+                    CHECKPOINT_OBJECTIVE_BAR_HEIGHT + panel_padding
+                    if self.level.has_checkpoints else panel_padding,
+                )
             ).inflate(panel_padding * 2, panel_padding * 2)
-            box.top = panel_padding
+            box.top = (
+                CHECKPOINT_OBJECTIVE_BAR_HEIGHT + panel_padding
+                if self.level.has_checkpoints else panel_padding
+            )
             pygame.draw.rect(self.screen, (28, 27, 24), box, border_radius=8)
             self.screen.blit(label, label.get_rect(center=box.center))
         if self.winner:
@@ -4950,16 +8683,49 @@ class Game:
         self.screen.blit(
             label,
             label.get_rect(
-                center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 24)
+                center=(self.screen.get_width() // 2, self.screen.get_height() // 2 - 66)
             ),
+        )
+        self.pause_fog_btn.rect.center = (
+            self.screen.get_width() // 2, self.screen.get_height() // 2 + 2
+        )
+        self.pause_fog_btn.text = (
+            "Fog of War: ON" if self.fog_of_war_enabled else "Fog of War: OFF"
+        )
+        self.pause_fog_btn.draw(
+            self.screen, pygame.mouse.get_pos(), self.button_font,
+            self.button_cost_font,
         )
         sub = self.font.render("Esc to resume  •  M for menu", True, CREAM)
         self.screen.blit(
             sub,
             sub.get_rect(
-                center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 28)
+                center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 58)
             ),
         )
+
+    def handle_menu_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.play_btn.rect.collidepoint(event.pos):
+                self.state = "level_select"
+            elif self.editor_btn.rect.collidepoint(event.pos):
+                self.state = "level_editor"
+            elif self.fog_btn.rect.collidepoint(event.pos):
+                self.toggle_fog_of_war()
+        elif event.type == pygame.KEYDOWN and event.key in (
+            pygame.K_RETURN, pygame.K_SPACE
+        ):
+            self.state = "level_select"
+
+    def handle_pause_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.pause_fog_btn.rect.collidepoint(event.pos):
+                self.toggle_fog_of_war()
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.state = "playing"
+            elif event.key == pygame.K_m:
+                self.state = "menu"
 
     def camera_input(self, dt):
         keys = pygame.key.get_pressed()
@@ -4999,6 +8765,14 @@ class Game:
             self.clamp_camera()
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
+                for rect, checkpoint in getattr(
+                    self, "checkpoint_bar_entries", []
+                ):
+                    if rect.collidepoint(event.pos):
+                        if checkpoint.discovered or not self.fog_of_war_enabled:
+                            self.camera[:] = [checkpoint.x, checkpoint.y]
+                            self.clamp_camera()
+                        return
                 for button, kind in getattr(self, "hud_buttons", []):
                     if button.rect.collidepoint(event.pos): self.recruit(kind); return
                 if event.pos[1] < self.screen.get_height() - HUD_H:
@@ -5036,31 +8810,13 @@ class Game:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT: running = False
                 elif self.state == "menu":
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.play_btn.rect.collidepoint(event.pos):
-                        self.state = "level_select"
-                    elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        self.state = "level_select"
+                    self.handle_menu_event(event)
                 elif self.state == "level_select":
-                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                        self.state = "menu"
-                    elif event.type == pygame.KEYDOWN and event.key in (
-                        pygame.K_1, pygame.K_2, pygame.K_3,
-                    ):
-                        self.start_level(event.key - pygame.K_0)
-                        self.state = "playing"
-                        self.update_visibility()
-                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        for button, number in self.level_buttons:
-                            if button.rect.collidepoint(event.pos):
-                                self.start_level(number)
-                                self.state = "playing"
-                                self.update_visibility()
-                                break
+                    self.handle_level_select_event(event)
+                elif self.state == "level_editor":
+                    self.handle_level_editor_event(event)
                 elif self.state == "paused":
-                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                        self.state = "playing"
-                    elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
-                        self.state = "menu"
+                    self.handle_pause_event(event)
                 else: self.handle_game_event(event)
             if self.state == "playing":
                 self.camera_input(dt); self.update(dt); self.draw_game()
@@ -5068,6 +8824,8 @@ class Game:
                 self.draw_game(); self.draw_pause()
             elif self.state == "level_select":
                 self.draw_level_select()
+            elif self.state == "level_editor":
+                self.draw_level_editor()
             else:
                 self.draw_menu()
             pygame.display.flip()

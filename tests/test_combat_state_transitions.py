@@ -274,7 +274,7 @@ class CombatStateTransitionTests(unittest.TestCase):
         first = simulate_integrated_decision_scenario(73)
         second = simulate_integrated_decision_scenario(73)
         self.assertEqual(first, second)
-        self.assertEqual(first["production"]["archer_threat_choice"], "shield")
+        self.assertEqual(first["production"]["archer_threat_choice"], "archer")
         self.assertGreater(first["production"]["shield_score_shift"], 0)
         self.assertLess(first["production"]["swordsman_score_shift"], 0)
         self.assertEqual(

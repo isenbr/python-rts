@@ -92,7 +92,7 @@ def _observe_army(game, kinds):
 
 def simulate_integration_review(seed=73, purchases=60):
     """Report deterministic loss-gated production scenarios A through D."""
-    neutral = {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS}
+    neutral = {"swordsman": .20, "archer": .50, "shield": .30}
 
     def encounter(player_count, red_count):
         game = Game(enemy_rng=random.Random(seed))

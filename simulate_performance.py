@@ -94,23 +94,31 @@ def simulate_scaling(sizes=ARMY_SIZES, seconds=2.0, seed=73):
     return [simulate_army_scale(size, seconds, seed) for size in sizes]
 
 
-def simulate_integrated_battle(frames=300, warmup=60, seed=73):
+def simulate_integrated_battle(frames=300, warmup=60, seed=73, level=3):
     """Measure a deterministic, rendered 100-unit dense battle at 60 Hz."""
     # Pin terrain independently from gameplay's fresh-match seeds so benchmark
     # comparisons measure code changes instead of a different random map.
     game = Game(
         enemy_rng=random.Random(seed), terrain_seed=INTEGRATED_TERRAIN_SEED
     )
+    if level != game.level_number:
+        game.reset(level)
     game.state = "playing"
     game.units[:] = [
         unit for unit in game.units
         if unit.is_king_objective or unit.is_autonomous_guard
+        or (level in (4, 5) and unit.is_native_defender)
     ]
-    for team, start_x, destination in (
+    remaining_units = 100 - len(game.units)
+    team_counts = (
+        (remaining_units + 1) // 2,
+        remaining_units // 2,
+    )
+    for (team, start_x, destination), count in zip((
         ("green", 42, (65, 52)),
         ("red", 60, (42, 52)),
-    ):
-        for index in range(47):
+    ), team_counts):
+        for index in range(count):
             unit = game.add_unit(
                 ("swordsman", "archer", "shield")[index % 3],
                 team,
@@ -138,6 +146,7 @@ def simulate_integrated_battle(frames=300, warmup=60, seed=73):
     percentile_index = max(0, math.ceil(len(ordered) * .95) - 1)
     average = statistics.mean(frame_times)
     return {
+        "level": level,
         "units": len(game.units),
         "frames": frames,
         "average_frame_ms": round(average * 1000, 3),
@@ -154,11 +163,12 @@ def main():
     parser.add_argument("--sizes", default="25,50,100,200")
     parser.add_argument("--seed", type=int, default=73)
     parser.add_argument("--integrated", action="store_true")
+    parser.add_argument("--level", type=int, choices=(3, 4, 5), default=3)
     parser.add_argument("--assert-60fps", action="store_true")
     args = parser.parse_args()
     sizes = tuple(int(value) for value in args.sizes.split(","))
     result = (
-        simulate_integrated_battle(seed=args.seed)
+        simulate_integrated_battle(seed=args.seed, level=args.level)
         if args.integrated
         else simulate_scaling(sizes, args.seconds, args.seed)
     )

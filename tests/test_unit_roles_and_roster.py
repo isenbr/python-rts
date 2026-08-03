@@ -8,6 +8,7 @@ from main import (
     AUTONOMOUS_GUARD_KINDS,
     ENEMY_PRODUCTION_KINDS,
     OBJECTIVE_UNIT_KINDS,
+    NATIVE_UNIT_KINDS,
     PURCHASABLE_UNIT_KINDS,
     RECRUIT_SHORTCUTS,
     SELECTION_SHORTCUTS,
@@ -35,7 +36,11 @@ class UnitRoleAndRosterTests(unittest.TestCase):
         self.assertEqual(AUTONOMOUS_GUARD_KINDS, ("knight",))
         self.assertEqual(
             ALL_UNIT_KINDS,
-            ("swordsman", "archer", "shield", "king", "knight"),
+            (
+                "swordsman", "archer", "shield",
+                *NATIVE_UNIT_KINDS,
+                "king", "knight",
+            ),
         )
         self.assertEqual(set(UNIT_COSTS), set(UNIT_KINDS))
 
@@ -93,6 +98,8 @@ class UnitRoleAndRosterTests(unittest.TestCase):
     def test_role_and_control_predicates_are_explicit(self):
         green_sword = Unit("swordsman", "green", 0, 0)
         red_sword = Unit("swordsman", "red", 0, 0)
+        green_native = Unit("elf_ranger", "green", 0, 0)
+        red_native = Unit("dwarf_guard", "red", 0, 0)
         green_king = Unit("king", "green", 0, 0)
         red_knight = Unit("knight", "red", 0, 0)
 
@@ -101,6 +108,10 @@ class UnitRoleAndRosterTests(unittest.TestCase):
         self.assertFalse(green_sword.is_enemy_ai_commandable)
         self.assertTrue(red_sword.is_enemy_ai_commandable)
         self.assertFalse(red_sword.is_player_commandable)
+        self.assertTrue(green_native.is_player_commandable)
+        self.assertFalse(green_native.is_enemy_ai_commandable)
+        self.assertTrue(red_native.is_enemy_ai_commandable)
+        self.assertFalse(red_native.is_player_commandable)
 
         self.assertTrue(green_king.is_king_objective)
         self.assertFalse(green_king.is_purchasable_army_unit)

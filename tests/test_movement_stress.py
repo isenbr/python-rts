@@ -275,6 +275,49 @@ class MovementStressTests(unittest.TestCase):
         self.assertEqual(result[2], 0)
         self.assertEqual((archer.x, archer.y), (50, 100))
 
+    def test_large_attack_order_resumes_formation_if_target_dies_en_route(self):
+        def scenario():
+            game = self.game()
+            movers = [
+                game.add_unit(
+                    "swordsman", "green",
+                    10 + (index % 6) * 1.15,
+                    40 + (index // 6) * 1.15,
+                )
+                for index in range(36)
+            ]
+            for unit in movers:
+                unit.selected = True
+            target = game.add_unit("shield", "red", 70, 43)
+            game.visible.add((70, 43))
+            game.issue_order((target.x, target.y))
+            return game, (movers, target)
+
+        def remove_target(observed):
+            _, target = observed
+
+            def before(step, _game):
+                if step == round(15 / self.DT):
+                    target.health = 0
+
+            return before
+
+        _, (movers, target), starts, _ = self.assert_deterministic(
+            scenario, 30, remove_target
+        )
+
+        self.assertEqual(target.health, 0)
+        self.assertTrue(all(unit.target is None for unit in movers))
+        self.assertTrue(all(
+            unit.order_pos is not None and unit.target_pos == unit.order_pos
+            for unit in movers
+        ))
+        self.assertEqual(len({unit.order_pos for unit in movers}), len(movers))
+        self.assertGreater(
+            sum(unit.x - starts[unit.uid][0] for unit in movers) / len(movers),
+            25,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

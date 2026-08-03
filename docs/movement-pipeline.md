@@ -76,7 +76,11 @@ global cap, avoiding tunneling and excessive correction.
 
 `Game.issue_order` collects selected, commandable green army units. Clicking a
 visible red unit within 1.5 tiles assigns that object as every selected unit's
-`target` and copies its current position to `target_pos`.
+`target` and copies its current position to `target_pos`. The same formation
+slots are retained in `order_pos`; if the clicked target dies while the group
+is still en route, the units continue to those slots instead of losing the
+command at their scattered combat positions. Dead units are never accepted as
+click targets.
 
 A ground order clears combat targets and lays the selected units out in a
 square-ish grid. The column count is `ceil(sqrt(count))`; each slot is spaced

@@ -56,7 +56,7 @@ class ExistingMechanicsTests(GameTestCase):
 
     def test_existing_unit_configuration_is_complete(self):
         self.assertEqual(UNIT_KINDS, ("swordsman", "archer", "shield"))
-        self.assertEqual(UNIT_STATS, {
+        expected_original_stats = {
             "swordsman": {
                 "max_health": 100, "speed": 1, "damage": 5,
                 "cooldown": .5, "attack_range": 1.02,
@@ -77,14 +77,22 @@ class ExistingMechanicsTests(GameTestCase):
                 "max_health": 400, "speed": 1, "damage": 10,
                 "cooldown": .5, "attack_range": 1.02,
             },
-        })
+        }
+        self.assertEqual(
+            {kind: UNIT_STATS[kind] for kind in expected_original_stats},
+            expected_original_stats,
+        )
         self.assertEqual(UNIT_COSTS, {
             "swordsman": 200, "archer": 500, "shield": 300,
         })
-        self.assertEqual(UNIT_RENDER_SCALES, {
+        expected_original_scales = {
             "swordsman": 1.55, "archer": 1.55, "shield": 1.55 * 1.15,
             "king": 2.2, "knight": 2.0,
-        })
+        }
+        self.assertEqual(
+            {kind: UNIT_RENDER_SCALES[kind] for kind in expected_original_scales},
+            expected_original_scales,
+        )
 
     def test_initial_bases_and_units_are_inside_map(self):
         self.assertEqual(MAP_SIZE, 120)
@@ -294,13 +302,13 @@ class ExistingMechanicsTests(GameTestCase):
         self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.game.enemy_ai.recruitment_timer = 0
         self.game.update(.25)
-        self.assertEqual(self.game.enemy_essence, 305)
+        self.assertEqual(self.game.enemy_essence, 5)
         self.assertEqual(
             [
                 (unit.team, unit.kind) for unit in self.game.units
                 if unit.is_purchasable_army_unit
             ],
-            [("red", "swordsman")],
+            [("red", "archer")],
         )
 
 
@@ -967,6 +975,19 @@ class EnemyAITests(GameTestCase):
         )
         self.assertIs(self.game.enemy_ai.choose_target(sword), enemy_archer)
 
+    def test_enemy_unit_only_auto_engages_within_five_tiles(self):
+        sword, opponent = self.set_units(
+            ("swordsman", "red", 20, 20),
+            ("swordsman", "green", 25, 20),
+        )
+
+        self.assertIs(self.game.enemy_ai.choose_target(sword), opponent)
+        self.game.update_unit(sword, 0)
+        self.assertEqual(sword.target_pos, (opponent.x, opponent.y))
+
+        opponent.x = 25.01
+        self.assertIsNone(self.game.enemy_ai.choose_target(sword))
+
     def test_enemy_unit_attacks_in_range_player_before_distant_priority_target(self):
         sword, nearby_sword, distant_archer = self.set_units(
             ("swordsman", "red", 20, 20),
@@ -1131,7 +1152,10 @@ class EnemyProductionTests(GameTestCase):
         self.assertEqual(self.ai.known_player_composition(), {
             "swordsman": 0, "archer": 0, "shield": 0
         })
-        self.assertEqual(self.ai.choose_production(), "swordsman")
+        self.assertEqual(self.ai.production_target_shares(), {
+            "swordsman": .20, "archer": .50, "shield": .30,
+        })
+        self.assertEqual(self.ai.choose_production(), "archer")
 
     def test_observed_armies_shift_weighted_counter_preference(self):
         self.add_red_frontline()
@@ -1156,7 +1180,10 @@ class EnemyProductionTests(GameTestCase):
                 low_scores = scores
             else:
                 self.assertGreater(scores["shield"], scores["swordsman"])
-                self.assertEqual(self.ai.choose_production(), "shield")
+                self.assertEqual(
+                    self.ai.production_target_shares(),
+                    self.ai.STANDARD_PRODUCTION_SHARES,
+                )
         self.assertGreater(
             self.ai.last_production_scores["shield"] - self.ai.last_production_scores["swordsman"],
             low_scores["shield"] - low_scores["swordsman"],
@@ -1180,7 +1207,8 @@ class EnemyProductionTests(GameTestCase):
         self.add_red_frontline()
         baseline_choice = self.ai.choose_production()
         self.observe_player(["archer"] * 6)
-        self.assertEqual(self.ai.choose_production(), "shield")
+        self.ai.production_scores()
+        self.assertEqual(self.ai.archer_threat_level, "high")
         self.game.units[:] = [u for u in self.game.units if u.is_king_objective or u.team == "red"]
         self.ai.elapsed += self.ai.PLAYER_KNOWLEDGE_TTL + .01
         self.ai._update_strategic_knowledge()
@@ -1267,14 +1295,14 @@ class EnemyProductionTests(GameTestCase):
             results[state] = choice
         self.assertEqual(set(results), set(AIState))
 
-    def test_sighting_does_not_override_neutral_target_in_base_defense(self):
+    def test_sighting_does_not_override_standard_target_in_base_defense(self):
         self.observe_player(["archer"] * 3)
         self.ai.state = AIState.DEFENDING
         self.game.enemy_essence = UNIT_COSTS["shield"]
         self.assertEqual(self.ai.production_target_shares(), {
-            kind: 1 / 3 for kind in UNIT_KINDS
+            "swordsman": .20, "archer": .50, "shield": .30,
         })
-        self.assertEqual(self.ai.choose_production(2), "swordsman")
+        self.assertIsNone(self.ai.choose_production(2))
 
     def test_shield_supports_frontline_and_mixed_armies_without_monoculture(self):
         self.game.add_unit("archer", "red", 170, 100)
@@ -1286,7 +1314,7 @@ class EnemyProductionTests(GameTestCase):
         self.assertEqual(self.ai.choose_production(2), "shield")
         self.game.units[:] = [unit for unit in self.game.units if unit.is_king_objective]
         self.game.add_unit("shield", "red", 170, 100)
-        self.assertEqual(self.ai.choose_production(), "swordsman")
+        self.assertEqual(self.ai.choose_production(), "archer")
 
     def test_shield_losses_and_production_history_are_complete(self):
         shield = self.game.add_unit("shield", "red", 170, 100)
@@ -1297,7 +1325,7 @@ class EnemyProductionTests(GameTestCase):
         self.assertGreater(self.ai.production_scores()["shield"], before)
         self.ai.state = AIState.DEFENDING
         self.ai.recruitment_timer = 0
-        self.game.enemy_essence = 300
+        self.game.enemy_essence = 500
         produced = self.ai._run_production(2)
         self.assertEqual(self.ai.production_history[-1]["kind"], produced)
         self.assertEqual(
@@ -1308,16 +1336,16 @@ class EnemyProductionTests(GameTestCase):
         )
         self.assertEqual(
             self.ai.production_history[-1]["target_shares"],
-            {kind: 1 / 3 for kind in UNIT_KINDS},
+            {"swordsman": .20, "archer": .50, "shield": .30},
         )
         self.assertIn("selected_deficit", self.ai.production_history[-1])
 
-    def test_neutral_target_is_stable_despite_tactical_hysteresis(self):
+    def test_standard_target_is_stable_despite_tactical_hysteresis(self):
         self.add_red_frontline()
         self.observe_player(["swordsman"])
         self.ai.last_production_choice = "archer"
         choices = [self.ai.choose_production() for _ in range(8)]
-        self.assertEqual(choices, ["shield"] * 8)
+        self.assertEqual(choices, ["archer"] * 8)
 
     def test_long_no_information_sequence_balances_essence_not_unit_counts(self):
         choices = []
@@ -1331,15 +1359,11 @@ class EnemyProductionTests(GameTestCase):
         shares = {kind: spent[kind] / total for kind in UNIT_KINDS}
         counts = {kind: choices.count(kind) for kind in UNIT_KINDS}
         self.assertEqual(counts, {
-            "swordsman": 19, "archer": 8, "shield": 13,
+            "swordsman": 14, "archer": 13, "shield": 13,
         })
-        self.assertEqual(len(set(counts.values())), len(UNIT_KINDS))
-        for share in shares.values():
-            self.assertAlmostEqual(share, 1 / 3, delta=.02)
-        self.assertLessEqual(
-            max(spent.values()) - min(spent.values()),
-            max(UNIT_COSTS.values()),
-        )
+        target = self.ai.STANDARD_PRODUCTION_SHARES
+        for kind in UNIT_KINDS:
+            self.assertAlmostEqual(shares[kind], target[kind], delta=.02)
 
     def test_low_resources_save_for_underfunded_unaffordable_kind(self):
         for kind in ("swordsman",) * 3 + ("shield",) * 2:
@@ -2261,7 +2285,7 @@ class EnemySimulationHarnessTests(unittest.TestCase):
         second = simulate_integration_review()
         self.assertEqual(first, second)
 
-        neutral = {kind: 1 / len(UNIT_KINDS) for kind in UNIT_KINDS}
+        neutral = {"swordsman": .20, "archer": .50, "shield": .30}
         scenario_a = first["scenario_a_player_loses"]
         self.assertTrue(scenario_a["remained_neutral"])
         self.assertEqual(scenario_a["target_after_player_loss"], neutral)

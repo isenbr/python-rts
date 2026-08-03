@@ -1,0 +1,154 @@
+  # Level 4 Income Checkpoints
+
+  ## Summary
+
+  Add a 160×160 Level 4 based on Level 3’s armies, wallets, victory condition, and full roster. Level 4
+  introduces exactly three capturable checkpoints—dwarven mountain, elven forest, and orc plains—while
+  Levels 1–3 retain their current behavior.
+
+  Player base income is 10 gold/second and enemy base income is 15 gold/second. Each checkpoint adds 5
+  gold/second to its green or red owner, allowing totals of 25 and 30 respectively.
+
+  ## Core Implementation
+
+  - Extend LevelConfig with player/enemy income rates and checkpoint enablement. Existing levels use
+    20/20 income with checkpoints disabled.
+
+  - Add a Checkpoint model containing position, native faction/terrain, current owner, capture
+    progress, spawn timer, and associated defender IDs.
+
+  - Generate one checkpoint in each non-path biome:
+      - Keep its footprint entirely on its native terrain and outside protected base zones.
+      - Select deterministic positions from the terrain seed, separated from bases and one another.
+      - Generate a road spur from the existing network to an adjacent cell, never converting the
+        checkpoint footprint itself into path terrain.
+
+  - Start each checkpoint native-owned with three melee and two ranged defenders. While native-owned,
+    spawn one alternating melee/ranged defender every 30 seconds up to 15 living associated units. Stop
+    spawning permanently once green or red captures it.
+
+  - Native defenders remain within a 12-tile checkpoint leash, attack nearby green/red forces, and
+    return to their posts when threats leave.
+
+  - Capture occurs when no native defender remains and exactly one main faction has living units within
+    2.5 tiles for five uninterrupted seconds. Empty or contested zones reset progress. Green and red
+    checkpoints remain recapturable using the same rule.
+
+  - Checkpoint structures are landmarks, not destructible combat targets. Render their terrain-specific
+    structure, ownership banner, and capture ring before fog so unexplored checkpoints remain obscured.
+
+  - Show the current dynamic income rate and owned-checkpoint count in the HUD.
+
+  ## Units and AI
+
+  Add six non-recruitable units with unique pygame-drawn silhouettes and faction colors:
+
+
+• Proposed Plan
+
+
+  # Level 4 Income Checkpoints
+
+  ## Summary
+
+  Add a 160×160 Level 4 based on Level 3’s armies, wallets, victory condition, and full roster. Level 4
+  introduces exactly three capturable checkpoints—dwarven mountain, elven forest, and orc plains—while
+  Levels 1–3 retain their current behavior.
+
+  Player base income is 10 gold/second and enemy base income is 15 gold/second. Each checkpoint adds 5
+  gold/second to its green or red owner, allowing totals of 25 and 30 respectively.
+
+  ## Core Implementation
+
+  - Extend LevelConfig with player/enemy income rates and checkpoint enablement. Existing levels use
+    20/20 income with checkpoints disabled.
+
+  - Add a Checkpoint model containing position, native faction/terrain, current owner, capture
+    progress, spawn timer, and associated defender IDs.
+
+  - Generate one checkpoint in each non-path biome:
+      - Keep its footprint entirely on its native terrain and outside protected base zones.
+      - Select deterministic positions from the terrain seed, separated from bases and one another.
+      - Generate a road spur from the existing network to an adjacent cell, never converting the
+        checkpoint footprint itself into path terrain.
+
+  - Start each checkpoint native-owned with three melee and two ranged defenders. While native-owned,
+    spawn one alternating melee/ranged defender every 30 seconds up to 15 living associated units. Stop
+    spawning permanently once green or red captures it.
+
+  - Native defenders remain within a 12-tile checkpoint leash, attack nearby green/red forces, and
+    return to their posts when threats leave.
+
+  - Capture occurs when no native defender remains and exactly one main faction has living units within
+    2.5 tiles for five uninterrupted seconds. Empty or contested zones reset progress. Green and red
+    checkpoints remain recapturable using the same rule.
+
+  - Checkpoint structures are landmarks, not destructible combat targets. Render their terrain-specific
+    structure, ownership banner, and capture ring before fog so unexplored checkpoints remain obscured.
+
+  - Show the current dynamic income rate and owned-checkpoint count in the HUD.
+
+  ## Units and AI
+
+  Add six non-recruitable units with unique pygame-drawn silhouettes and faction colors:
+
+   Faction    Unit               HP    Speed    Damage / cooldown    Range    Visual theme
+  ━━━━━━━━━  ━━━━━━━━━━━━━━━━  ━━━━━  ━━━━━━━  ━━━━━━━━━━━━━━━━━━━  ━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Dwarf      Axe Guard         260     0.65             6 / 0.8s     1.02    Heavy steel armor and
+                                                                              axe
+  ─────────  ────────────────  ─────  ───────  ───────────────────  ───────  ──────────────────────────
+   Dwarf      Arbalist          100     0.60            30 / 2.0s      4.5    Armored crossbow
+  ─────────  ────────────────  ─────  ───────  ───────────────────  ───────  ──────────────────────────
+   Elf        Bladedancer        70     1.20            7 / 0.45s     1.02    Teal/gold curved blade
+  ─────────  ────────────────  ─────  ───────  ───────────────────  ───────  ──────────────────────────
+   Elf        Longbow Ranger     25     1.00            50 / 1.6s      6.5    Longbow and leaf motif
+  ─────────  ────────────────  ─────  ───────  ───────────────────  ───────  ──────────────────────────
+   Orc        Cleaver           130     0.95            14 / 0.5s     1.02    Dark-green brute with
+                                                                              cleaver
+  ─────────  ────────────────  ─────  ───────  ───────────────────  ───────  ──────────────────────────
+   Orc        Spear Thrower      50     0.80           45 / 1.25s      4.0    Javelin and tusk motif
+
+  - Generalize hostility, targeting, visibility, combat effects, and rendering so native defenders can
+    fight both green and red without becoming recruitable or commandable.
+
+  - Generalize AI objectives from only the Verdant King to checkpoints or the king.
+  - On Level 4, red prioritizes green-owned checkpoints, then native checkpoints, and attacks the king
+    only when all three checkpoints are red-owned. A surviving wave proceeds to the next checkpoint
+    after capturing its target.
+
+  - Checkpoint waves bypass the existing 6,000-gold launch requirement. Launch only when estimated wave
+    strength is at least 1.35× the target’s living defenders, using the extended combat-strength model.
+
+  - Reduce the Level 4 rally ceiling to eight seconds once strength-qualified and tune the starting
+    target selection so the inherited red army plus its first affordable recruit launches within 30
+    simulated seconds. Preserve the existing Level 3 AI thresholds and behavior.
+
+  - Red receives checkpoint income under the same rules as green.
+
+  ## UI and Validation
+
+  - Add Level 4 metadata, story copy, difficulty, and preview to the selector; convert the selector to
+    a responsive 2×2 card layout at 1280×720.
+
+  - Add tests covering:
+      - Level 4 configuration and unchanged Levels 1–3 behavior.
+      - Deterministic one-per-biome placement, checkpoint/path separation, adjacent road access, and
+        retry seed stability.
+
+      - Initial 3/2 defender composition, 30-second spawning, 15-unit cap, casualty replacement,
+        leashing, and spawning stopping after capture.
+
+      - Five-second capture, contested/reset behavior, recapture, and 10/15 base plus 5-per-checkpoint
+        income.
+
+      - Native targeting, fog visibility, unique stats, and combat.
+      - Level 4 AI checkpoint priority, sub-6,000 early launch, 1.35 strength gate, capture
+        transitions, and eventual king targeting.
+
+  - Run the full unit suite and integrated performance benchmark on the 160×160 map.
+  - Capture level-select and in-game checkpoint screenshots only under /work/screenshots; inspect every
+    screenshot with view_image and report clipping, overlap, readability, fog, path, or faction-clarity
+    problems.
+
+  - Do not commit changes.
+  
