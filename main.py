@@ -463,6 +463,7 @@ class EditorLevelDraft:
     green_income: float
     red_income: float
     fog_of_war: bool
+    hard_mode: bool = False
 
     def resize(self, new_size):
         """Resize without throwing away the terrain the player already made."""
@@ -545,6 +546,7 @@ class EditorLevelDraft:
             "green_income": self.green_income,
             "red_income": self.red_income,
             "fog_of_war": self.fog_of_war,
+            "hard_mode": self.hard_mode,
         }
 
     @classmethod
@@ -591,6 +593,7 @@ class EditorLevelDraft:
             float(clamp(float(data.get("green_income", 20)), 0, 100)),
             float(clamp(float(data.get("red_income", 20)), 0, 100)),
             bool(data.get("fog_of_war", True)),
+            bool(data.get("hard_mode", False)),
         )
 
 
@@ -786,7 +789,7 @@ def make_default_editor_draft(size=200):
         size, terrain, holds, green_start, red_start, set(UNIT_KINDS),
         {"swordsman": 2, "archer": 1, "shield": 1},
         {"swordsman": 3, "archer": 1, "shield": 1},
-        20.0, 20.0, True,
+        20.0, 20.0, True, False,
     )
 
 
@@ -956,6 +959,7 @@ def make_random_editor_draft(
         draft.green_income,
         draft.red_income,
         draft.fog_of_war,
+        draft.hard_mode,
     )
 
 
@@ -3907,6 +3911,277 @@ class Button:
             surf.blit(cost_font.render(self.sub, True, (215, 185, 108) if enabled else self.disabled_sub), (self.rect.x + 12, self.rect.y + 34))
 
 
+class HardModeAI(EnemyAI):
+    """Player-style strategic controller used by the optional hard mode.
+
+    Unit-level targeting, kiting, and visibility still come from ``EnemyAI``.
+    This class replaces its wave planner with the same recruit, rally,
+    reserve, checkpoint, and flanking decisions used by the gameplay
+    controller.
+    """
+
+    TARGET_SHARES = {
+        3: {"swordsman": .20, "archer": .40, "shield": .40},
+        4: {"swordsman": .15, "archer": .55, "shield": .30},
+        5: {"swordsman": .20, "archer": .40, "shield": .40},
+        0: {"swordsman": .20, "archer": .40, "shield": .40},
+    }
+    RALLY_VALUES = {3: 12000, 4: 10000, 5: 6500, 0: 6500}
+    RECRUIT_INTERVAL = .5
+    ORDER_INTERVAL = 8.0
+    RESERVE_VALUES = {4: 2000, 5: 2500, 0: 2500}
+
+    def __init__(self, game, rng=None, decision_interval=.25):
+        super().__init__(game, rng, decision_interval)
+        self.next_recruit = 0.0
+        self.next_order = 0.0
+        self.assault_started = False
+        self.assault_uids: set[int] = set()
+        self.current_checkpoint_uid = None
+        self.march_x = None
+        self.flank_index = 0
+        self.controller_status = "Rallying the Crimson army"
+
+    def _controller_army(self):
+        return [
+            unit for unit in self.game.units
+            if unit.is_enemy_ai_commandable and unit.health > 0
+        ]
+
+    @staticmethod
+    def _unit_value(unit):
+        return UNIT_COSTS.get(unit.kind, 300)
+
+    def _army_value(self, units=None):
+        if units is None:
+            units = self._controller_army()
+        return sum(self._unit_value(unit) for unit in units)
+
+    def _assault_units(self):
+        return [
+            unit for unit in self._controller_army()
+            if unit.uid in self.assault_uids
+        ]
+
+    def _available_kinds(self):
+        return tuple(
+            kind for kind in UNIT_KINDS
+            if kind not in self.unavailable_production_kinds
+        )
+
+    def _choose_recruit(self):
+        available = self._available_kinds()
+        if not available:
+            return None
+        investment = {kind: 0 for kind in available}
+        for unit in self._controller_army():
+            if unit.kind in investment:
+                investment[unit.kind] += UNIT_COSTS[unit.kind]
+        shares = self.TARGET_SHARES.get(
+            self.game.level_number, self.TARGET_SHARES[0]
+        )
+
+        def projected_error(kind):
+            projected = dict(investment)
+            projected[kind] += UNIT_COSTS[kind]
+            total = sum(projected.values()) or 1
+            return sum(
+                abs(projected[candidate] / total - shares[candidate])
+                for candidate in projected
+            )
+
+        preferred = min(
+            available, key=lambda kind: (projected_error(kind), kind)
+        )
+        return (
+            preferred
+            if self.game.enemy_essence >= UNIT_COSTS[preferred]
+            else None
+        )
+
+    def _recruit(self):
+        while True:
+            kind = self._choose_recruit()
+            if kind is None or not self.game.recruit(kind, "red"):
+                return
+            self.last_production_choice = kind
+
+    def _threats_to_king(self):
+        king = self.game.team_king("red")
+        if king is None:
+            return []
+        return sorted(
+            (
+                unit for unit in self.game.units
+                if self.game.teams_hostile("red", unit.team)
+                and unit.health > 0
+                and dist((unit.x, unit.y), (king.x, king.y)) <= 20
+            ),
+            key=lambda unit: (dist((unit.x, unit.y), (king.x, king.y)), unit.uid),
+        )
+
+    def _set_controller_state(self, state):
+        if state != self.state:
+            self.state = state
+            self.state_history.append((self.elapsed, state))
+
+    def _rally_value(self):
+        return self.RALLY_VALUES.get(
+            self.game.level_number, self.RALLY_VALUES[0]
+        )
+
+    def _reset_broken_assault(self):
+        if not self.assault_started:
+            return
+        committed = self._army_value(self._assault_units())
+        factor = .5 if self.game.level_number == 4 else .75
+        if committed >= self._rally_value() * factor:
+            return
+        self.assault_started = False
+        self.assault_uids.clear()
+        self.current_checkpoint_uid = None
+        self.march_x = None
+        self.flank_index = 0
+
+    def _begin_assault(self):
+        if self.assault_started:
+            return
+        self.assault_started = True
+        reserve_value = self.RESERVE_VALUES.get(
+            self.game.level_number,
+            self.RESERVE_VALUES[0] if self.game.custom_level_active else 0,
+        )
+        commit_target = max(0, self._army_value() - reserve_value)
+        committed_value = 0
+        for unit in sorted(self._controller_army(), key=lambda item: item.uid):
+            if committed_value >= commit_target:
+                break
+            self.assault_uids.add(unit.uid)
+            committed_value += self._unit_value(unit)
+
+    def _checkpoint_target(self):
+        current = self.game.checkpoint_by_uid(self.current_checkpoint_uid)
+        if current is not None and current.owner != "red":
+            return current
+        remaining = [
+            checkpoint for checkpoint in self.game.checkpoints
+            if checkpoint.owner != "red"
+        ]
+        if not remaining:
+            self.current_checkpoint_uid = None
+            return None
+        army = self._assault_units() or self._controller_army()
+        king = self.game.team_king("red")
+        origin = (
+            (
+                sum(unit.x for unit in army) / len(army),
+                sum(unit.y for unit in army) / len(army),
+            )
+            if army else (king.x, king.y)
+        )
+        target = min(
+            remaining,
+            key=lambda checkpoint: (
+                dist(origin, (checkpoint.x, checkpoint.y)), checkpoint.uid
+            ),
+        )
+        self.current_checkpoint_uid = target.uid
+        self.checkpoint_target_uid = target.uid
+        return target
+
+    def _choose_objective(self):
+        self._reset_broken_assault()
+        value = self._army_value()
+        threats = self._threats_to_king()
+        if threats and not self.assault_started:
+            self.controller_status = "Defending the Crimson King"
+            self._set_controller_state(AIState.DEFENDING)
+            return (threats[0].x, threats[0].y)
+        if not self.assault_started and value < self._rally_value():
+            king = self.game.team_king("red")
+            self.controller_status = f"Rallying army — {value:,} gold fielded"
+            self._set_controller_state(AIState.RALLYING)
+            return (king.x + 2, king.y)
+
+        self._begin_assault()
+        self._set_controller_state(AIState.ATTACKING)
+
+        if self.game.level_number == 4 and not self.game.custom_level_active:
+            flank = [
+                (MAP_SIZE - 45.0, MAP_SIZE * .25),
+                (48.0, MAP_SIZE * .25),
+            ]
+            committed = self._assault_units()
+            if committed and self.flank_index < len(flank):
+                center = (
+                    sum(unit.x for unit in committed) / len(committed),
+                    sum(unit.y for unit in committed) / len(committed),
+                )
+                if dist(center, flank[self.flank_index]) < 8:
+                    self.flank_index += 1
+            if self.flank_index < len(flank):
+                self.controller_status = "Flanking the Verdant host"
+                return flank[self.flank_index]
+
+        if self.game.level.has_checkpoints:
+            checkpoint = self._checkpoint_target()
+            if checkpoint is not None:
+                self.controller_status = "Assaulting a strategic hold"
+                return checkpoint.x, checkpoint.y
+
+        green_king = self.game.team_king("green")
+        if green_king is not None:
+            self.controller_status = "Marching on the Verdant King"
+            return green_king.x, green_king.y
+        return GREEN_KING_POSITION
+
+    def _order_units(self, units, world):
+        units = [unit for unit in units if unit.health > 0]
+        if not units:
+            return
+        columns = math.ceil(math.sqrt(len(units)))
+        destinations = [
+            clamp_to_map((
+                world[0] + (index % columns - (columns - 1) / 2) * 1.15,
+                world[1] + (index // columns) * 1.15,
+            ))
+            for index in range(len(units))
+        ]
+        for unit, destination in zip(
+            sorted(units, key=lambda item: item.uid), destinations
+        ):
+            self.game.clear_navigation(unit)
+            unit.target = None
+            unit.target_auto_acquired = False
+            unit.order_pos = destination
+            unit.target_pos = destination
+
+    def _issue_orders(self):
+        army = self._controller_army()
+        if not army:
+            return
+        objective = self._choose_objective()
+        ordered = self._assault_units() if self.assault_started else army
+        self._order_units(ordered, objective)
+        if self.assault_started:
+            threats = self._threats_to_king()
+            if threats:
+                reserve = [
+                    unit for unit in army if unit.uid not in self.assault_uids
+                ]
+                self._order_units(reserve, (threats[0].x, threats[0].y))
+
+    def update(self, dt):
+        self.elapsed += dt
+        self.decision_timer += dt
+        while self.elapsed + 1e-9 >= self.next_recruit:
+            self._recruit()
+            self.next_recruit += self.RECRUIT_INTERVAL
+        while self.elapsed + 1e-9 >= self.next_order:
+            self._issue_orders()
+            self.next_order += self.ORDER_INTERVAL
+
+
 class Game:
     def __init__(
         self, enemy_rng=None, ai_decision_interval=.25, terrain_seed=None
@@ -3936,6 +4211,9 @@ class Game:
         self.level_number = 3
         self.level = LEVELS[self.level_number]
         self.custom_level_active = False
+        self.campaign_hard_mode = False
+        self.hard_mode = False
+        self.difficulty_buttons = []
         self.enemy_rng = enemy_rng
         self.ai_decision_interval = ai_decision_interval
         self.terrain_seed = TERRAIN_SEED if terrain_seed is None else terrain_seed
@@ -3971,6 +4249,9 @@ class Game:
         if level_number is not None:
             self.level_number = level_number
             self.custom_level_active = False
+            self.hard_mode = bool(
+                self.campaign_hard_mode and self.level_number >= 3
+            )
         if not self.custom_level_active:
             self.level = LEVELS[self.level_number]
             configure_map(self.level.map_size)
@@ -4029,7 +4310,10 @@ class Game:
         self.message = (
             "Defeat all enemy units"
             if self.level_number == 1
-            else "Defeat the Crimson King"
+            else (
+                "Hard mode — defeat the Crimson King"
+                if self.hard_mode else "Defeat the Crimson King"
+            )
         )
         self.message_time = 4
         self.winner = None
@@ -4056,7 +4340,14 @@ class Game:
                     and (unit.is_king_objective or unit.is_autonomous_guard)
                 )
             ]
-        self.enemy_ai = EnemyAI(self, self.enemy_rng, self.ai_decision_interval)
+        ai_class = (
+            HardModeAI
+            if self.hard_mode and self.level.enemy_ai == "full"
+            else EnemyAI
+        )
+        self.enemy_ai = ai_class(
+            self, self.enemy_rng, self.ai_decision_interval
+        )
         self._movement_snapshot_active = False
         self._path_searches_this_update = 0
         self.rebuild_unit_spatial_hash()
@@ -4074,6 +4365,7 @@ class Game:
         self.custom_level_active = True
         self.level_number = 0
         self.level = self.editor_draft.to_level_config()
+        self.hard_mode = self.editor_draft.hard_mode
         self.fog_of_war_enabled = self.editor_draft.fog_of_war
         self.terrain_seed = random.SystemRandom().getrandbits(64)
         self.reset()
@@ -8020,6 +8312,21 @@ class Game:
                 tag_surface, tag_surface.get_rect(center=tag_rect.center)
             )
             tag_x = tag_rect.right + 8
+        self.difficulty_buttons = []
+        if config.number >= 3:
+            mode = Button(
+                (details.x + inset, details.bottom - 108, detail_width, 38),
+                (
+                    "Opponent AI  •  HARD"
+                    if self.campaign_hard_mode
+                    else "Opponent AI  •  STANDARD"
+                ),
+            )
+            mode.draw(
+                self.screen, pygame.mouse.get_pos(), self.button_font,
+                self.button_cost_font,
+            )
+            self.difficulty_buttons = [(mode, "campaign")]
         play = Button(
             (details.x + inset, details.bottom - 60, detail_width, 42),
             f"Deploy to Location {config.number}",
@@ -8032,7 +8339,10 @@ class Game:
         self.level_nav_buttons = []
         self.level_dot_rects = []
         hint = self.small.render(
-            "Click a location  •  1–5 choose  •  Enter deploy  •  Esc return",
+            (
+                "Click a location  •  1–5 choose  •  H difficulty  •  "
+                "Enter deploy  •  Esc return"
+            ),
             True, (190, 180, 153),
         )
         self.screen.blit(hint, hint.get_rect(center=(w // 2, h - 20)))
@@ -8345,6 +8655,14 @@ class Game:
                 "fog", draft.fog_of_war,
             )
             y += 54
+            self.screen.blit(self.small.render("ENEMY AI", True, GOLD), (inner_x, y))
+            y += 25
+            self._draw_editor_button(
+                (inner_x, y, inner_w, 38),
+                "Hard" if draft.hard_mode else "Standard",
+                "difficulty", draft.hard_mode,
+            )
+            y += 54
             info = (
                 "Resizing preserves your design by scaling terrain, holds, "
                 "and starting positions to the new battlefield."
@@ -8501,6 +8819,12 @@ class Game:
             self.editor_notice = (
                 "Fog of war enabled" if draft.fog_of_war else "Fog of war disabled"
             )
+        elif action == "difficulty":
+            draft.hard_mode = not draft.hard_mode
+            self.editor_notice = (
+                "Hard enemy AI enabled"
+                if draft.hard_mode else "Standard enemy AI enabled"
+            )
         elif action.startswith("available:"):
             kind = action.split(":", 1)[1]
             if kind in draft.available_units and len(draft.available_units) == 1:
@@ -8595,12 +8919,19 @@ class Game:
             ):
                 self.selected_level_page = event.key - pygame.K_0
                 return
+            if event.key == pygame.K_h and self.selected_level_page >= 3:
+                self.campaign_hard_mode = not self.campaign_hard_mode
+                return
             if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                 self.start_level(self.selected_level_page)
                 self.state = "playing"
                 self.update_visibility()
                 return
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for button, action in self.difficulty_buttons:
+                if button.rect.collidepoint(event.pos) and action == "campaign":
+                    self.campaign_hard_mode = not self.campaign_hard_mode
+                    return
             for marker, number in self.level_location_rects:
                 if marker.collidepoint(event.pos):
                     self.selected_level_page = number

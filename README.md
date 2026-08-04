@@ -25,6 +25,11 @@ The level selector shows one battlefield at a time. Use **Left / Right** or the
 Previous/Next buttons to browse, **1–5** to jump directly to a level, and
 **Enter** to play the selected page. Page dots are clickable, **Esc** returns to
 the title, and the last selected page is remembered after the first visit.
+On levels three through five, use **H** or the opponent-AI button to switch
+between Standard and Hard mode. Hard mode uses a player-style strategic
+controller that recruits toward deliberate army compositions, rallies before
+attacking, defends its king, keeps reserves, captures holds, and uses flanking
+routes where appropriate.
 Level five is presented only as the large, clickable title **Last Stand**;
 its ordinary selector details and controls are intentionally hidden.
 
@@ -42,7 +47,8 @@ The editor opens with an expanded 200×200 map and supports 60×60, 120×120,
   size, hold count, the percentage of holds connected to roads, path amount,
   and the relative plains, forest, and mountain ratios.
 - **Settings** changes map size, Verdant and Crimson income, and whether fog of
-  war is enabled for the custom level.
+  war is enabled for the custom level. It also selects Standard or Hard enemy
+  AI, and that choice is stored with the saved custom battlefield.
 - **Armies** chooses the player-recruitable unit roster and the starting unit
   counts for both sides.
 - **Save** writes `custom_level.json`; it is loaded automatically the next time
