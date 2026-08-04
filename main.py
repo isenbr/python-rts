@@ -5,6 +5,7 @@ import math
 import random
 import heapq
 import json
+from array import array
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -3885,6 +3886,171 @@ class EnemyAI:
                 self._finish_recovery()
 
 
+class SoundtrackController:
+    """Crossfade between procedural exploration and battle music."""
+
+    FADE_MS = 700
+    PEACEFUL_VOLUME = .38
+    FIGHTING_VOLUME = .46
+    LOOP_SECONDS = 8
+    _sound_cache = {}
+
+    def __init__(self):
+        self.mode = None
+        self._disabled = False
+        self._peaceful_channel = None
+        self._fighting_channel = None
+        self._peaceful_sound = None
+        self._fighting_sound = None
+
+    @classmethod
+    def _render_loop(cls, mood, sample_rate, channels):
+        """Build a looping 16-bit PCM track without requiring audio assets."""
+        frame_count = sample_rate * cls.LOOP_SECONDS
+        segment_length = cls.LOOP_SECONDS / 4
+        if mood == "peaceful":
+            chords = (
+                (130.81, 164.81, 196.00),
+                (110.00, 130.81, 164.81),
+                (87.31, 110.00, 130.81),
+                (98.00, 123.47, 146.83),
+            )
+            melody = (
+                392.00, 440.00, 329.63, 293.66,
+                261.63, 329.63, 293.66, 246.94,
+            )
+        else:
+            chords = (
+                (73.42, 87.31, 110.00),
+                (65.41, 77.78, 98.00),
+                (73.42, 87.31, 110.00),
+                (82.41, 98.00, 123.47),
+            )
+            melody = (
+                293.66, 293.66, 349.23, 329.63,
+                293.66, 261.63, 246.94, 261.63,
+            )
+
+        pcm = array("h")
+        for index in range(frame_count):
+            time = index / sample_rate
+            segment = min(3, int(time / segment_length))
+            chord = chords[segment]
+            if mood == "peaceful":
+                pad = sum(
+                    math.sin(math.tau * frequency * time)
+                    for frequency in chord
+                ) / len(chord)
+                note_index = int(time) % len(melody)
+                note_time = time % 1.0
+                pluck = (
+                    math.sin(math.tau * melody[note_index] * time)
+                    * math.exp(-3.2 * note_time)
+                )
+                wave = (
+                    .52 * pad * (1 + .12 * math.sin(math.tau * time / 4))
+                    + .24 * pluck
+                )
+            else:
+                root = chord[0]
+                drone = (
+                    math.sin(math.tau * root * time)
+                    + .45 * math.sin(math.tau * root * 2 * time)
+                ) / 1.45
+                pulse_time = time % .5
+                pulse_index = int(time / .5) % len(melody)
+                pulse = (
+                    math.sin(math.tau * melody[pulse_index] * time)
+                    * math.exp(-7 * pulse_time)
+                )
+                beat_time = time % .5
+                drum = (
+                    math.sin(math.tau * (82 - 90 * beat_time) * beat_time)
+                    * math.exp(-13 * beat_time)
+                )
+                wave = .50 * drone + .30 * pulse + .28 * drum
+
+            # A short edge fade prevents clicks at the loop boundary.
+            edge = min(
+                1.0, time / .025, (cls.LOOP_SECONDS - time) / .025
+            )
+            sample = int(max(-1.0, min(1.0, wave * edge)) * 13500)
+            pcm.extend((sample,) * channels)
+        return pcm.tobytes()
+
+    def _ensure_audio(self):
+        if self._disabled:
+            return False
+        if self._peaceful_sound is not None:
+            return True
+        try:
+            if pygame.mixer.get_init() is None:
+                pygame.mixer.init()
+            sample_rate, sample_size, channels = pygame.mixer.get_init()
+            if sample_size != -16 or channels not in (1, 2):
+                self._disabled = True
+                return False
+            pygame.mixer.set_num_channels(
+                max(2, pygame.mixer.get_num_channels())
+            )
+            cache_key = (sample_rate, channels)
+            sounds = self._sound_cache.get(cache_key)
+            if sounds is None:
+                sounds = (
+                    pygame.mixer.Sound(buffer=self._render_loop(
+                        "peaceful", sample_rate, channels
+                    )),
+                    pygame.mixer.Sound(buffer=self._render_loop(
+                        "fighting", sample_rate, channels
+                    )),
+                )
+                self._sound_cache[cache_key] = sounds
+            self._peaceful_sound, self._fighting_sound = sounds
+            # There are no sound effects yet, so stable music channels keep
+            # ownership deterministic when a level or test creates a Game.
+            self._peaceful_channel = pygame.mixer.Channel(0)
+            self._fighting_channel = pygame.mixer.Channel(1)
+            self._peaceful_channel.stop()
+            self._fighting_channel.stop()
+            return True
+        except pygame.error:
+            # Audio-less systems should still be able to play the game.
+            self._disabled = True
+            return False
+
+    def set_mode(self, mode):
+        if mode not in (None, "peaceful", "fighting"):
+            raise ValueError(f"Invalid soundtrack mode: {mode!r}")
+        if mode == self.mode:
+            return
+        previous = self.mode
+        self.mode = mode
+        if mode is None and self._peaceful_channel is None:
+            return
+        if not self._ensure_audio():
+            return
+        if previous == "peaceful" or mode is None:
+            self._peaceful_channel.fadeout(self.FADE_MS)
+        if previous == "fighting" or mode is None:
+            self._fighting_channel.fadeout(self.FADE_MS)
+        if mode == "peaceful":
+            self._peaceful_channel.set_volume(self.PEACEFUL_VOLUME)
+            self._peaceful_channel.play(
+                self._peaceful_sound, loops=-1, fade_ms=self.FADE_MS
+            )
+        elif mode == "fighting":
+            self._fighting_channel.set_volume(self.FIGHTING_VOLUME)
+            self._fighting_channel.play(
+                self._fighting_sound, loops=-1, fade_ms=self.FADE_MS
+            )
+
+    def shutdown(self):
+        self.set_mode(None)
+        if self._peaceful_channel is not None:
+            self._peaceful_channel.stop()
+            self._fighting_channel.stop()
+
+
 class Button:
     def __init__(self, rect, text, sub="", disabled_text=(130, 126, 116), disabled_sub=(110, 105, 97)):
         self.rect = pygame.Rect(rect)
@@ -4184,7 +4350,8 @@ class HardModeAI(EnemyAI):
 
 class Game:
     def __init__(
-        self, enemy_rng=None, ai_decision_interval=.25, terrain_seed=None
+        self, enemy_rng=None, ai_decision_interval=.25, terrain_seed=None,
+        soundtrack=None,
     ):
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
         self.clock = pygame.time.Clock()
@@ -4194,6 +4361,9 @@ class Game:
         self.small = pygame.font.Font(None, 19)
         self.button_font = pygame.font.Font(None, 25)
         self.button_cost_font = pygame.font.Font(None, 18)
+        self.soundtrack = (
+            soundtrack if soundtrack is not None else SoundtrackController()
+        )
         self.state = "menu"
         # This is deliberately a presentation setting.  Team visibility sets
         # continue to drive targeting, combat, AI knowledge, and exploration.
@@ -5388,6 +5558,23 @@ class Game:
 
     def currently_visible_enemy(self, enemy):
         return self.is_visible(enemy.x, enemy.y)
+
+    def has_visible_enemy(self):
+        """Return whether a living hostile unit is in the player's true vision."""
+        return any(
+            unit.health > 0
+            and self.teams_hostile("green", unit.team)
+            and self.currently_visible_enemy(unit)
+            for unit in self.units
+        )
+
+    def update_soundtrack(self):
+        """Keep gameplay music aligned with the player's current information."""
+        if self.state != "playing" or self.winner:
+            mode = None
+        else:
+            mode = "fighting" if self.has_visible_enemy() else "peaceful"
+        self.soundtrack.set_mode(mode)
 
     def is_visible(self, x, y):
         return (int(x), int(y)) in self.visible
@@ -6669,6 +6856,7 @@ class Game:
 
     def update(self, dt):
         if self.state != "playing" or self.winner:
+            self.update_soundtrack()
             return
         self.message_time = max(0, self.message_time - dt)
         self.navigation_time += max(0.0, dt)
@@ -6770,6 +6958,7 @@ class Game:
         if self.reveal_tick <= 0:
             self.update_visibility()
             self.reveal_tick = .12
+        self.update_soundtrack()
 
     def update_simple_enemy_ai(self):
         """Spend each complete 200-essence tranche on an immediate attacker."""
@@ -9159,7 +9348,9 @@ class Game:
                 self.draw_level_editor()
             else:
                 self.draw_menu()
+            self.update_soundtrack()
             pygame.display.flip()
+        self.soundtrack.shutdown()
         pygame.quit()
 
 
